@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src/pennylane_mock
+      - run: uv run pytest tests/
+
+  image:
+    needs: tests
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=sha
+      - name: Build local pour le smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: pennylane-mock:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test — l'image doit démarrer et parler le dialecte
+        run: |
+          docker run -d --rm --name smoke -p 8000:8000 pennylane-mock:smoke
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/health > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:8000/health
+          BASE=http://localhost:8000/api/external/v2
+          # Sans bearer, la surface rend le 401 de Pennylane — jamais un
+          # {"detail"} FastAPI.
+          test "$(curl -s -o /dev/null -w '%{http_code}' $BASE/customer_invoices)" = "401"
+          curl -s $BASE/customer_invoices | grep -q '"status":401'
+          # Une route inconnue rend l'enveloppe Pennylane, pas le 404 FastAPI.
+          curl -s $BASE/nimportequoi -H 'Authorization: Bearer mock-pennylane-token' \
+            | grep -q '"error":"Not Found"'
+          # L'enveloppe à curseur, et les en-têtes de débit sur une réponse SAINE.
+          curl -s -D /tmp/h -H 'Authorization: Bearer mock-pennylane-token' \
+            "$BASE/customer_invoices?limit=2" | grep -q '"has_more":true'
+          grep -qi '^ratelimit-limit:' /tmp/h
+          # `limit` hors bornes : 400, jamais un rabotage silencieux.
+          test "$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'Authorization: Bearer mock-pennylane-token' "$BASE/customers?limit=9999")" = "400"
+          docker stop smoke
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha

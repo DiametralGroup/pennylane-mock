@@ -1,0 +1,34 @@
+# Local deployment in one command:
+#
+#     docker compose up --build
+#
+# The mock answers on http://localhost:8014 (8010 boondmanager, 8011 entra,
+# 8012 linkedin and 8013 ga are taken by the sibling mocks of the insights360
+# ecosystem — the port map is shared, do not reuse one):
+#
+#     curl http://localhost:8014/health
+#     curl -H "Authorization: Bearer mock-pennylane-token" \
+#          http://localhost:8014/api/external/v2/customer_invoices
+#
+# `depends_on: condition: service_healthy` works on the consumer side: the
+# healthcheck ships INSIDE the image.
+services:
+  pennylane-mock:
+    # Local build by default; swap `build:` for the published image if preferred:
+    #   image: ghcr.io/littlebigcode/pennylane-mock:latest
+    build: .
+    image: pennylane-mock:0.1.0
+    ports:
+      - "8014:8000"
+    environment:
+      # Failure-injection, virtual clock and scope control plane — essential
+      # outside the process.
+      PENNYLANE_MOCK_ADMIN_ENABLED: "true"
+      # Company life advances one event per minute (incremental extraction).
+      # Set to "false" for a byte-stable dataset — which is what a consumer's
+      # idempotence gate needs.
+      PENNYLANE_MOCK_EVOLUTION_ENABLED: "true"
+      PENNYLANE_MOCK_EVOLUTION_INTERVAL: "60"
+      # Dataset seed — the same seed produces the same world, and it is the
+      # SAME seed as the four sibling mocks.
+      PENNYLANE_MOCK_SEED: "42"

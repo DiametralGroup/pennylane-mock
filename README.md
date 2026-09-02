@@ -1,0 +1,309 @@
+# pennylane-mock
+
+[![CI](https://github.com/LittleBigCode/pennylane-mock/actions/workflows/ci.yml/badge.svg)](https://github.com/LittleBigCode/pennylane-mock/actions/workflows/ci.yml)
+
+Mock of the **Pennylane Company API v2** (read surface), shipped both as a
+**container image** and as an **installable Python package**. It serves the
+**91 GET operations** of the documented v2 surface over one coherent accounting
+world — the books of *Boréal Conseil*, the same fictional French IT consultancy
+that already populates `boondmanager-mock`, `entra-mock`, `linkedin-mock` and
+`ga-mock`.
+
+The shapes are not written from memory. Pennylane embeds a **full OpenAPI
+fragment in every one of its 163 reference pages**; those were downloaded and
+merged into a single spec (123 paths, 158 operations, 91 of them GET), and that
+spec is what this mock reproduces. The method is replayable — see
+[`docs/EXTRACTION.md`](docs/EXTRACTION.md).
+
+## Start in one command
+
+```bash
+# Pre-built image from GitHub Container Registry (published by CI):
+docker run -p 8014:8000 -e PENNYLANE_MOCK_ADMIN_ENABLED=true \
+    ghcr.io/littlebigcode/pennylane-mock:latest
+
+# Or build locally (admin plane open, evolution active):
+docker compose up --build           # or: make up
+curl http://localhost:8014/health
+
+# Or locally without Docker:
+make bootstrap && make run
+```
+
+The image is non-root (uid/gid 65532) with a built-in healthcheck, so
+`depends_on: condition: service_healthy` works on the consumer side. Port
+**8014** is this mock's slot in the insights360 ecosystem (8010 boondmanager,
+8011 entra, 8012 linkedin, 8013 ga are taken — the map is shared).
+
+## Credentials
+
+Everything is overridable through environment variables (see
+[Configuration](#configuration)); out of the box:
+
+| Role | Variable | Default value |
+|---|---|---|
+| Company API token | `PENNYLANE_MOCK_TOKEN` | `mock-pennylane-token` |
+| Granted scopes | `PENNYLANE_MOCK_SCOPES` | all 24 read scopes of the v2 surface |
+| `/__admin` control plane | `PENNYLANE_MOCK_ADMIN_TOKEN` | `mock-admin-token` (header `X-Mock-Admin-Token`; only mounted when `PENNYLANE_MOCK_ADMIN_ENABLED=true`) |
+
+```bash
+curl -H "Authorization: Bearer mock-pennylane-token" \
+     "http://localhost:8014/api/external/v2/customer_invoices?limit=2"
+
+# Who am I, and what may I read? The natural smoke test for a connector —
+# it is the ONLY endpoint that requires no scope.
+curl -H "Authorization: Bearer mock-pennylane-token" \
+     http://localhost:8014/api/external/v2/me
+```
+
+Heads-up, exactly as on the real API: **401** means the token is missing,
+invalid or expired — the three are indistinguishable. **403** means the token
+is fine but lacks a scope, and the message *names the missing scope*. Neither is
+retryable.
+
+## Two modes, both maintained
+
+```python
+# In-process — for test suites.
+from fastapi.testclient import TestClient
+import pennylane_mock as mock
+
+client = TestClient(mock.app)
+mock.state.reset(seed=42)
+```
+
+```bash
+# In a container — for docker compose and CI services.
+python -m pennylane_mock
+```
+
+The property worth keeping: **the application your stack queries IS the one the
+tests exercise.** The container mode is also what makes the `/__admin` control
+plane necessary — outside the process, a test can no longer mutate state in
+Python.
+
+## Served surface
+
+All **91 GET operations**, mounted from a declarative table
+(`RESSOURCES` / `SOUS_RESSOURCES` / `CHANGELOGS` in `app.py`) rather than 91
+hand-written handlers. Every route goes through the same prelude —
+*evolution → observation → injections → token → scope* — so no route can escape
+a scope check or a failure rule.
+
+| Domain | Resources |
+|---|---|
+| Accounting | `journals`, `ledger_accounts`, `ledger_entries` (+lines, DMS files), `ledger_entry_lines` (+categories, lettered lines), `trial_balance`, `fiscal_years` |
+| Sales | `customer_invoices` (+lines, sections, payments, matched transactions, appendices, categories, custom header fields, installments), `customer_invoice_templates`, `quotes`, `commercial_documents`, `billing_subscriptions` |
+| Purchases | `supplier_invoices` (+lines, categories, payments, matched transactions), `purchase_requests` |
+| Third parties | `customers` (company **and** individual, +contacts, categories), `suppliers`, `products` |
+| Banking | `bank_accounts`, `bank_establishments`, `transactions` (+categories, matched invoices) |
+| Analytics | `categories`, `category_groups` |
+| Mandates | `sepa_mandates`, `gocardless_mandates`, `pro_account/mandates`, `pro_account/mandate_migrations` |
+| Exports | general ledger, analytical general ledger, FEC (retrieval) |
+| Changelogs | 10 families — `customer_invoices`, `supplier_invoices`, `customers`, `suppliers`, `products`, `transactions`, `quotes`, `ledger_entry_lines`, and both `*_categories` |
+| Misc | `me`, `pa_registrations` |
+
+**Writes are out of scope.** This mock's consumer reads; it does not write. A
+POST/PUT/DELETE answers 404 *in the Pennylane dialect* — never FastAPI's 405.
+
+## The reproduced dialect
+
+Five things that will break a consumer if they are not exact — and each one is
+different from the four sibling mocks:
+
+| | Pennylane | ...vs the neighbours |
+|---|---|---|
+| Auth | static `Authorization: Bearer` + **granular scopes** | static JWT (Boond), client_credentials (Entra), RS256 SA (GA), bearer + version header (LinkedIn) |
+| Pagination | **opaque cursor** — `{items, has_more, next_cursor}` | `page`/`maxResults`, `@odata.nextLink`, `start`/`count`, `limit`/`offset` |
+| Amounts | **strings** (`"230.32"`), including `quantity`, `weight`, `debit`/`credit` | numbers everywhere else |
+| Nested collections | **links** `{"url": …}` — a second call is required | inline arrays or `included` |
+| Rate limit | 25 req / 5 s; **429 body is plain text**, `ratelimit-*` headers on *every* response | 429 with (Boond, GA) or without (LinkedIn) `Retry-After`, always JSON |
+
+Three traps reproduced on purpose, because they are silent in production:
+
+1. **The cursor does not encode filters.** The vendor says it plainly:
+   *"Omitting the filters on page 2+ will return unfiltered results from the
+   cursor position."* No error, no warning — just extra rows. A pipeline that
+   forgets to replay its `filter` loads rows it believes it excluded.
+2. **`limit` out of bounds returns 400, it is not silently capped.** A silent
+   cap makes a pipeline believe it asked for 5000 rows and got them all, when it
+   read 100.
+3. **The default sort is `-id`** — descending. A consumer that assumes ascending
+   order anchors its checkpoint on the newest row and never sees anything again.
+
+## The dataset: Boréal Conseil's books
+
+One coherent world, deterministic at seed **42**, anchored at **2026-07-15** —
+never `datetime.now()`. Two runs produce the same bytes, which is what makes a
+consumer's idempotence gate possible.
+
+Everything derives from the **ledger entries**: an invoice is not an amount
+placed next to a plausible entry, the entry *is* the source and the invoice
+derives from it. Amounts are handled as **integer cents** and formatted to
+strings, so `sum(debit) == sum(credit)` holds exactly — and
+`tests/test_coherence.py` asserts it, per entry and in total, before *and after*
+the world has evolved.
+
+| | |
+|---|---|
+| chart of accounts | 19 general + 17 auxiliary (French PCG subset) |
+| journals | VE, AC, BQ, OD, AN, SA |
+| customers | 10 companies + 2 individuals (the `oneOf` a connector must handle) |
+| suppliers | 5 |
+| customer invoices | 60, including drafts, one credit note, and one customer with **zero** invoices |
+| supplier invoices | 34, across three `accounting_status` values |
+| bank transactions | 90, three of them **deliberately unreconciled** |
+| ledger entries / lines | 181 / 460 |
+
+### What is shared with the sibling mocks, and what is not
+
+**Shared** (duplicated here, with no package dependency — none of the five mocks
+depends on another): the ten client and three supplier company names, the time
+anchor, the seed, the 20 % VAT rate, and the `FAC-2026-NNNN` / `AV-2026-NNNN`
+reference format. BoondManager's prospect *MediaQuartz* exists here as a
+customer with no invoice at all.
+
+**Not shared, and worth stating plainly: the amounts.** Reproducing them to the
+cent would mean replaying BoondManager's mission×day-rate matrix here — some
+1500 lines of duplicated business logic that would diverge on the first change
+to either repo. A downstream test comparing the two mocks compares **sets of
+customers and reference series, not euros.**
+
+## Incremental extraction
+
+Two mechanisms, and they work together.
+
+**Changelogs** — the vendor's native mechanism. Ten endpoints returning change
+events (id + operation + timestamps, **never** the resource state: a second,
+batched call via `filter=[{"field":"id","operator":"in","value":[…]}]` is
+required). Four dialect rules, all reproduced:
+
+- chronological **ascending** order;
+- **4-week retention** — the mock *purges*, it does not merely refuse: an older
+  event is not returned at all, so a consumer cannot mistake the changelog for a
+  full-resync channel;
+- a `start_date` beyond the window returns **422**, not a truncated list;
+- `start_date` and `cursor` together return **400** — pagination continues a
+  window, it does not open a new one.
+
+**Time evolution** — the world lives. One scripted event per interval (60 s by
+default): an invoice updated, a payment received, a new invoice, a customer
+edited, a supplier invoice, an orphan transaction. Event *k* draws its
+randomness from `Random(f"{seed}:{k}")` and is stamped `EPOQUE + (k+1) x
+interval`, so two mocks advanced by the same number of steps hold the same
+world. Every event that creates a flow posts a **balanced** entry.
+
+Set `PENNYLANE_MOCK_EVOLUTION_ENABLED=false` to freeze the dataset — which is
+what a consumer's idempotence gate needs.
+
+The mock's reference instant is the dataset anchor, **not the wall clock**: the
+retention window is reproducible whatever day the container is started.
+
+## Failure modes
+
+*The point of the mock is to reproduce failure modes, not just happy paths.*
+Rules are declarative and driven over HTTP, because the mock runs in a container
+at the consumer's side.
+
+```bash
+A='X-Mock-Admin-Token: mock-admin-token'
+BASE=http://localhost:8014
+
+# 429 with a plain-text body — a client calling .json() on it breaks here,
+# not in production.
+curl -H "$A" -X POST $BASE/__admin/inject \
+  -d '{"kind":"rate_limit","scope":"/api/external/v2/*","after_requests":5,"retry_after_seconds":2}'
+
+# A transient failure that stops on its own — otherwise you are not testing a
+# retry, you are testing a failure.
+curl -H "$A" -X POST $BASE/__admin/inject \
+  -d '{"kind":"status","scope":"/api/external/v2/customers","status":503,"times":1}'
+
+# The most common real-world integration failure: a token regenerated with one
+# checkbox missing.
+curl -H "$A" -X POST $BASE/__admin/inject \
+  -d '{"kind":"scope_reject","scope":"/api/external/v2/transactions","scope_manquant":"transactions:readonly"}'
+```
+
+Kinds: `rate_limit`, `status`, `latency`, `page_drift`, `auth_reject`,
+`scope_reject`, `cursor_reject`. Each takes a glob `scope` and an optional
+`times` — that is the difference between a transient failure a retry must
+absorb and a persistent one that must fail the run with a non-zero exit code.
+
+## Control plane
+
+Closed by default; when disabled the surface **does not exist** (it is not
+"mounted then forbidden").
+
+| Route | Purpose |
+|---|---|
+| `POST /__admin/reset` | rebuild the dataset (`{"seed": 7}`), re-applying the environment's injection baseline — not an empty one |
+| `GET /__admin/state` | seed, totals, `request_counts_by_path`, **`last_query_params_by_path`**, injections, clock offset, evolution log |
+| `POST /__admin/inject` · `DELETE /__admin/inject/{id}` · `POST /__admin/inject/clear` | failure rules |
+| `POST /__admin/clock` | `{"advance_seconds": 3600}` — time windows **without `sleep`** |
+| `POST /__admin/evolve` | `{"pas": 5}` — force N evolution events, clock untouched |
+| `POST /__admin/mutate` | edit an entity and push its `updated_at` above every other |
+| `POST /__admin/scopes` | redefine the token's scopes — the 403 lever |
+
+`last_query_params_by_path` is the keystone for downstream tests: it is what
+lets a consumer **prove** it actually sent its `cursor`, `filter` or
+`start_date`. Without that proof, a pipeline that forgot its cursor would pass
+every test — it would simply reload page one each time, and no assertion about
+content would notice.
+
+## Configuration
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PENNYLANE_MOCK_TOKEN` | `mock-pennylane-token` | the accepted bearer token |
+| `PENNYLANE_MOCK_SCOPES` | all 24 read scopes | comma-separated; remove one to get a 403 |
+| `PENNYLANE_MOCK_SEED` | `42` | dataset seed — the same seed, the same world |
+| `PENNYLANE_MOCK_ADMIN_ENABLED` | `false` | mounts `/__admin` |
+| `PENNYLANE_MOCK_ADMIN_TOKEN` | `mock-admin-token` | `X-Mock-Admin-Token` |
+| `PENNYLANE_MOCK_EVOLUTION_ENABLED` | `true` | let the world live |
+| `PENNYLANE_MOCK_EVOLUTION_INTERVAL` | `60` | seconds between events |
+| `PENNYLANE_MOCK_DEFAULT_LIMIT` | `20` | vendor default page size |
+| `PENNYLANE_MOCK_MAX_LIMIT` | `100` | list cap; out of bounds → 400 |
+| `PENNYLANE_MOCK_MAX_LIMIT_CHANGELOG` | `1000` | changelog cap |
+| `PENNYLANE_MOCK_RATE_LIMIT` / `_RATE_WINDOW` | `25` / `5` | advertised in `ratelimit-*` |
+| `PENNYLANE_MOCK_CHANGELOG_RETENTION_DAYS` | `28` | the 4-week window |
+| `PENNYLANE_MOCK_COMPANY` / `_COMPANY_ID` / `_COMPANY_REG_NO` | `Boréal Conseil` / … | what `/me` reports |
+| `PENNYLANE_MOCK_RATE_LIMIT_AFTER` / `_RETRY_AFTER` | unset | a baseline injection rule re-applied on every reset |
+| `PENNYLANE_MOCK_HOST` / `_PORT` | `0.0.0.0` / `8000` | uvicorn bind |
+
+There is deliberately **no `.env.example`** here: it lives with the consumer
+(insights360), which is where the five sources have to be wired together.
+
+## Development
+
+```bash
+make bootstrap   # uv sync
+make test        # pytest
+make lint        # ruff check + ruff format --check + strict mypy
+make format
+make contract    # regenerate contracts/pennylane.openapi.yaml — REVIEW the diff
+```
+
+The pydantic models are the **source** of the published contract. `make
+contract` regenerates `contracts/pennylane.openapi.yaml`, and a test fails if it
+drifts — that file is what insights360 copies and pins, so if it lies, it lies
+for everyone downstream. `/__admin` and `/health` are stripped from it: they are
+mock affordances, and `/__admin` is mounted conditionally, so publishing it
+would make the contract depend on the environment that generated it.
+
+Anything not attested by the vendor's OpenAPI is marked
+`x-pennylane-confidence` in the contract **and** listed in
+[`docs/UNVERIFIED-FIELDS.md`](docs/UNVERIFIED-FIELDS.md), with what it would
+take to settle each doubt. A test enforces it: honesty is a build constraint.
+The most structural doubt is the **error body** — the vendor's own guide and its
+OpenAPI disagree, and this mock follows the OpenAPI.
+
+### Probing a real instance
+
+```bash
+PENNYLANE_TOKEN=xxx uv run python scripts/compare_real.py
+```
+
+GET-only, writes nothing, and copies **no data** into its report — only field
+names and types (which is exactly where the string-amounts trap shows). Any
+difference is a difference of the *mock*: the vendor is right.
