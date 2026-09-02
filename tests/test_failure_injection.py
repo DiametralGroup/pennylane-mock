@@ -128,6 +128,24 @@ def test_le_plan_de_controle_expose_les_parametres_recus(client):
     assert etat["request_counts_by_path"][f"{BASE}/customer_invoices"] == 2
 
 
+def test_le_reset_restaure_les_scopes_de_l_environnement(client):
+    """Le plan de contrôle mute un objet GLOBAL : reconstruire le jeu de données
+    ne suffit pas à le rétablir.
+
+    Sans ce rétablissement, un test qui retire un scope le retire pour tous les
+    suivants — et la panne se manifeste des tests plus loin, sur un 403 qui n'a
+    rien à voir avec ce qu'on croyait éprouver. C'est exactement ce qui est
+    arrivé à la suite d'intégration d'insights360 avant ce correctif.
+    """
+    client.post("/__admin/scopes", headers=ADMIN, json={"scopes": ["customers:readonly"]})
+    assert client.get(f"{BASE}/journals", headers=H).status_code == 403
+
+    client.post("/__admin/reset", headers=ADMIN, json={})
+    assert client.get(f"{BASE}/journals", headers=H).status_code == 200
+    etat = client.get("/__admin/state", headers=ADMIN).json()
+    assert len(etat["scopes"]) > 1
+
+
 def test_le_reset_reconstruit_le_monde_et_vide_les_regles(client):
     _injecter(client, kind="status", scope="*", status=500)
     reponse = client.post("/__admin/reset", headers=ADMIN, json={"seed": 7})

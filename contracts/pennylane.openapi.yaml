@@ -4,7 +4,7 @@ info:
   description: Mock de l'API Pennylane v2 (lecture seule) sur le monde « Boréal Conseil
     ». Enveloppe à curseur `{items, has_more, next_cursor}`, montants en CHAÎNES,
     scopes granulaires, changelogs pour l'extraction incrémentale.
-  version: 0.1.0
+  version: 0.1.1
 servers:
 - url: https://app.pennylane.com
 paths:

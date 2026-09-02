@@ -36,15 +36,24 @@ class MockState:
         self.reset()
 
     def reset(self, seed: int | None = None) -> None:
-        """Reconstruit le jeu de données et remet les compteurs à zéro.
+        """Reconstruit le jeu de données et remet TOUT à la ligne de base.
 
-        ⚠️ Les règles d'injection sont remises À LA LIGNE DE BASE DÉCLARÉE PAR
-        L'ENVIRONNEMENT, et non à vide : si un `reset` vidait les règles, la
-        première requête d'une suite de tests effacerait silencieusement une
-        limite de débit configurée au niveau du compose.
+        ⚠️ « La ligne de base » est celle DÉCLARÉE PAR L'ENVIRONNEMENT, pas un
+        état vide. Trois choses en dépendent, et chacune a sa raison :
 
-        L'évolution est RÉARMÉE : la chronologie repart de zéro.
+          • **la configuration** est relue (`settings.reload()`). Sans elle, un
+            test qui a retiré un scope par `/__admin/scopes` le retire pour
+            TOUS les suivants : le plan de contrôle mute un objet global, et
+            reconstruire le jeu de données ne le rétablit pas. La panne est
+            silencieuse et se manifeste des tests plus loin, sur un 403 qui n'a
+            rien à voir avec ce qu'on croyait tester ;
+          • **les règles d'injection** sont remises à la baseline de
+            l'environnement. Si un `reset` les vidait, la première requête
+            d'une suite effacerait une limite de débit configurée au niveau du
+            compose ;
+          • **l'évolution** est RÉARMÉE : la chronologie repart de zéro.
         """
+        settings.reload()
         self.seed = settings.seed if seed is None else seed
         self.dataset = build_dataset(self.seed)
         engine.clear()

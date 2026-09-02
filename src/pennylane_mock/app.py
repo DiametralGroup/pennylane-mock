@@ -86,7 +86,7 @@ from .settings import settings
 from .state import state
 
 PREFIXE = "/api/external/v2"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
