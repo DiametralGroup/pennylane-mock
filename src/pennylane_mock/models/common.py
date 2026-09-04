@@ -76,13 +76,54 @@ class Reference(Permissif):
 class Page[T](BaseModel):
     """L'enveloppe de pagination : `{items, has_more, next_cursor}`.
 
-    `additionalProperties: false` chez le fournisseur — exactement trois clés.
     `next_cursor` est **`null`**, pas absent et pas `""`, quand il n'y a plus
     rien : un consommateur qui teste `if "next_cursor" in body` boucle à
     l'infini.
+
+    ┌─ L'ENVELOPPE N'EST PAS UNIFORME, ET L'OPENAPI NE LE DIT PAS ───────────┐
+    │ Ce modèle portait `additionalProperties: false` — « exactement trois    │
+    │ clés » — sur la foi de l'OpenAPI officiel. Confronté à une instance     │
+    │ réelle le 2026-09-04 (`scripts/compare_real.py`), c'est faux : QUATRE   │
+    │ collections sur seize ajoutent une pagination par OFFSET à côté du      │
+    │ curseur — `current_page`, `per_page`, `total_items`, `total_pages`.     │
+    │                                                                         │
+    │ Ce sont `journals`, `ledger_accounts`, `ledger_entries` et              │
+    │ `fiscal_years`. Pas `ledger_entry_lines`, pourtant de la même famille : │
+    │ il n'y a donc aucune règle à deviner, seulement une observation à       │
+    │ reproduire.                                                             │
+    │                                                                         │
+    │ Le mock affirmait donc une régularité que le fournisseur n'a pas — et   │
+    │ un mock plus régulier que la réalité est le même défaut qu'un mock plus │
+    │ permissif : il valide du code qui casse ailleurs. Un consommateur qui   │
+    │ aurait voulu afficher un total, compter les pages ou court-circuiter le │
+    │ curseur aurait trouvé le champ en production et pas ici.                │
+    │                                                                         │
+    │ Et elles valent `null` : présentes, vides. Un consommateur qui teste    │
+    │ leur PRÉSENCE pour choisir son mode de pagination les trouve, bascule    │
+    │ sur l'offset, et lit `null` partout — sans une erreur.                   │
+    │                                                                          │
+    │ D'où `extra="allow"` : les quatre clés sont rendues là où elles ont été  │
+    │ OBSERVÉES, et nulle part ailleurs. Cf. docs/UNVERIFIED-FIELDS.md.        │
+    └─────────────────────────────────────────────────────────────────────────┘
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
+
+    #: Pagination par OFFSET, servie par les seules collections où elle a été
+    #: observée. Déclarée ici POUR LE CONTRAT : la réponse est un `JSONResponse`
+    #: bâti sur le dict de `paginer`, donc ces clés sont réellement ABSENTES
+    #: ailleurs, et non rendues à `null`. Rendre `"total_pages": null` sur une
+    #: collection qui ne la porte pas serait un troisième dialecte, inventé.
+    current_page: int | None = Field(
+        default=None, description="Rang de la page — `null` sous curseur."
+    )
+    per_page: int | None = Field(default=None, description="Taille de page — `null` sous curseur.")
+    total_items: int | None = Field(
+        default=None, description="Total d'éléments — `null` sous curseur."
+    )
+    total_pages: int | None = Field(
+        default=None, description="Total de pages — `null` sous curseur."
+    )
 
     items: list[T]
     has_more: bool = Field(description="Une page supplémentaire existe-t-elle ?")

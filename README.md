@@ -114,7 +114,7 @@ different from the four sibling mocks:
 | | Pennylane | ...vs the neighbours |
 |---|---|---|
 | Auth | static `Authorization: Bearer` + **granular scopes** | static JWT (Boond), client_credentials (Entra), RS256 SA (GA), bearer + version header (LinkedIn) |
-| Pagination | **opaque cursor** — `{items, has_more, next_cursor}` | `page`/`maxResults`, `@odata.nextLink`, `start`/`count`, `limit`/`offset` |
+| Pagination | **opaque cursor** — `{items, has_more, next_cursor}`, plus four **inert** offset keys on four collections (see below) | `page`/`maxResults`, `@odata.nextLink`, `start`/`count`, `limit`/`offset` |
 | Amounts | **strings** (`"230.32"`), including `quantity`, `weight`, `debit`/`credit` | numbers everywhere else |
 | Nested collections | **links** `{"url": …}` — a second call is required | inline arrays or `included` |
 | Rate limit | 25 req / 5 s; **429 body is plain text**, `ratelimit-*` headers on *every* response | 429 with (Boond, GA) or without (LinkedIn) `Retry-After`, always JSON |
@@ -307,3 +307,24 @@ PENNYLANE_TOKEN=xxx uv run python scripts/compare_real.py
 GET-only, writes nothing, and copies **no data** into its report — only field
 names and types (which is exactly where the string-amounts trap shows). Any
 difference is a difference of the *mock*: the vendor is right.
+
+## The envelope is not uniform, and the OpenAPI does not say so
+
+Four collections out of sixteen — `journals`, `ledger_accounts`,
+`ledger_entries` and `fiscal_years` — return **four extra keys** next to the
+cursor: `current_page`, `per_page`, `total_items`, `total_pages`. Not
+`ledger_entry_lines`, which belongs to the same accounting family as three of
+them. There is no rule to infer here, only an observation to reproduce.
+
+**And all four are `null`.** Present, and empty. A consumer that tests for
+their *presence* to pick a pagination mode will find them, switch to offset,
+and read `null` everywhere — with no error.
+
+Found on 2026-09-04 by `scripts/compare_real.py` against a real instance. The
+first attempt at this fix *computed* the four values, which was more useful and
+therefore more wrong: a mock that returns a total where the provider returns
+`null` validates code that breaks in production. The comparison script caught
+it on the very next run.
+
+The cursor stays the safe path: it is the one present on all sixteen
+collections, and the one the provider's own guide documents.

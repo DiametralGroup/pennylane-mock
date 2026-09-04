@@ -17,7 +17,7 @@ services:
     # Local build by default; swap `build:` for the published image if preferred:
     #   image: ghcr.io/littlebigcode/pennylane-mock:latest
     build: .
-    image: pennylane-mock:0.1.1
+    image: pennylane-mock:0.2.0
     ports:
       - "8014:8000"
     environment:

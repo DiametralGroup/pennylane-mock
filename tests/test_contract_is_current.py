@@ -77,7 +77,11 @@ def test_le_contrat_documente_la_pagination():
     reponse = liste["responses"]["200"]["content"]["application/json"]["schema"]
     reference = reponse["$ref"].rsplit("/", 1)[-1]
     schema = contrat["components"]["schemas"][reference]
-    assert set(schema["properties"]) == {"items", "has_more", "next_cursor"}
+    # Les trois clés du curseur, toujours — c'est la voie sûre, présente sur
+    # les seize collections. Les quatre clés d'offset sont déclarées à côté
+    # parce que quatre collections les rendent (cf. test_pagination.py) ; le
+    # contrat doit les documenter, sinon un générateur de client les rejette.
+    assert {"items", "has_more", "next_cursor"} <= set(schema["properties"])
 
 
 def test_le_contrat_documente_les_modes_de_panne():

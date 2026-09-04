@@ -1,6 +1,6 @@
 [project]
 name = "pennylane-mock"
-version = "0.1.1"
+version = "0.2.0"
 description = "Pennylane Company API v2 mock — the accounting view of the Boréal Conseil world"
 readme = "README.md"
 requires-python = ">=3.12"
