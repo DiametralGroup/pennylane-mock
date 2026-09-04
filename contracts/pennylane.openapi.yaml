@@ -4,7 +4,7 @@ info:
   description: Mock de l'API Pennylane v2 (lecture seule) sur le monde « Boréal Conseil
     ». Enveloppe à curseur `{items, has_more, next_cursor}`, montants en CHAÎNES,
     scopes granulaires, changelogs pour l'extraction incrémentale.
-  version: 0.1.1
+  version: 0.2.0
 servers:
 - url: https://app.pennylane.com
 paths:
@@ -9768,6 +9768,30 @@ components:
       title: LigneFacture
     Page_Categorie_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/Categorie'
@@ -9783,7 +9807,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -9791,6 +9815,30 @@ components:
       title: Page[Categorie]
     Page_CompteBancaire_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/CompteBancaire'
@@ -9806,7 +9854,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -9814,6 +9862,30 @@ components:
       title: Page[CompteBancaire]
     Page_ComptePlan_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/ComptePlan'
@@ -9829,7 +9901,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -9837,6 +9909,30 @@ components:
       title: Page[ComptePlan]
     Page_Contact_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/Contact'
@@ -9852,7 +9948,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -9860,6 +9956,30 @@ components:
       title: Page[Contact]
     Page_Ecriture_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/Ecriture'
@@ -9875,7 +9995,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -9883,6 +10003,30 @@ components:
       title: Page[Ecriture]
     Page_ElementGenerique_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/ElementGenerique'
@@ -9898,7 +10042,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -9906,6 +10050,30 @@ components:
       title: Page[ElementGenerique]
     Page_EtablissementBancaire_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/EtablissementBancaire'
@@ -9921,7 +10089,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -9929,6 +10097,30 @@ components:
       title: Page[EtablissementBancaire]
     Page_EvenementChangelog_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/EvenementChangelog'
@@ -9944,7 +10136,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -9952,6 +10144,30 @@ components:
       title: Page[EvenementChangelog]
     Page_Exercice_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/Exercice'
@@ -9967,7 +10183,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -9975,6 +10191,30 @@ components:
       title: Page[Exercice]
     Page_FactureClient_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/FactureClient'
@@ -9990,7 +10230,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -9998,6 +10238,30 @@ components:
       title: Page[FactureClient]
     Page_FactureFournisseur_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/FactureFournisseur'
@@ -10013,7 +10277,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -10021,6 +10285,30 @@ components:
       title: Page[FactureFournisseur]
     Page_Fournisseur_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/Fournisseur'
@@ -10036,7 +10324,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -10044,6 +10332,30 @@ components:
       title: Page[Fournisseur]
     Page_GroupeCategories_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/GroupeCategories'
@@ -10059,7 +10371,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -10067,6 +10379,30 @@ components:
       title: Page[GroupeCategories]
     Page_Journal_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/Journal'
@@ -10082,7 +10418,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -10090,6 +10426,30 @@ components:
       title: Page[Journal]
     Page_LigneBalance_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/LigneBalance'
@@ -10105,7 +10465,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -10113,6 +10473,30 @@ components:
       title: Page[LigneBalance]
     Page_LigneEcriture_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/LigneEcriture'
@@ -10128,7 +10512,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -10136,6 +10520,30 @@ components:
       title: Page[LigneEcriture]
     Page_LigneFacture_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/LigneFacture'
@@ -10151,7 +10559,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -10159,6 +10567,30 @@ components:
       title: Page[LigneFacture]
     Page_Produit_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/Produit'
@@ -10174,7 +10606,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -10182,6 +10614,30 @@ components:
       title: Page[Produit]
     Page_Reglement_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/Reglement'
@@ -10197,7 +10653,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -10205,6 +10661,30 @@ components:
       title: Page[Reglement]
     Page_TiersClient_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/TiersClient'
@@ -10220,7 +10700,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items
@@ -10228,6 +10708,30 @@ components:
       title: Page[TiersClient]
     Page_Transaction_:
       properties:
+        current_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Current Page
+          description: Rang de la page — `null` sous curseur.
+        per_page:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Per Page
+          description: Taille de page — `null` sous curseur.
+        total_items:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Items
+          description: Total d'éléments — `null` sous curseur.
+        total_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Pages
+          description: Total de pages — `null` sous curseur.
         items:
           items:
             $ref: '#/components/schemas/Transaction'
@@ -10243,7 +10747,7 @@ components:
           - type: 'null'
           title: Next Cursor
           description: Curseur de la page suivante ; `null` à la fin des résultats.
-      additionalProperties: false
+      additionalProperties: true
       type: object
       required:
       - items

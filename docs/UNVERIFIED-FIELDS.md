@@ -71,3 +71,19 @@ les prenne pas pour des bugs.
 | **Aucun webhook** | Comme les quatre mocks voisins, le patron est strictement *pull*. L'équivalent du « push » est `evolution.py` + `/__admin/clock`. Pennylane, lui, propose de vrais webhooks. |
 | **Pas d'OAuth 2.0** | Seul le jeton de compagnie (Bearer statique) est servi. Le flux d'autorisation n'apporte rien à un connecteur d'extraction, qui utilise un jeton long. |
 | **Montants du jeu de données** | Ils ne reproduisent PAS ceux de `boondmanager-mock` à l'euro près. Voir l'encadré de `src/pennylane_mock/dataset/realiste.py` : ce sont les raisons sociales, l'ancre, la graine et le format des références qui sont partagés, pas les euros. |
+
+## Offset pagination keys under `page`/`per_page` parameters
+
+`journals`, `ledger_accounts`, `ledger_entries` and `fiscal_years` return
+`current_page`, `per_page`, `total_items` and `total_pages` alongside the
+cursor envelope. Observed on 2026-09-04: **all four are `null`** when paginating
+by cursor, which is the only mode this mock serves.
+
+What is **not** known: whether the provider fills them when the caller paginates
+by `page`/`per_page` query parameters instead. The mock does not accept those
+parameters, so the question never arises here — and inventing an answer would
+create a third dialect that exists nowhere.
+
+To settle it: call one of those four collections on a real instance with
+`?page=2&per_page=10` and record what the four keys carry. Until then the mock
+serves `null`, which is what has actually been seen.

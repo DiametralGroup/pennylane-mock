@@ -158,3 +158,73 @@ def test_un_operateur_inconnu_rend_400(client):
 @pytest.mark.parametrize("brut", ["pas-du-json", '{"field":"id"}', '[{"field":"id"}]'])
 def test_un_filtre_mal_forme_rend_400(client, brut):
     assert client.get(f"{BASE}/customers?filter={brut}", headers=H).status_code == 400
+
+
+# ── L'enveloppe n'est pas uniforme, et l'OpenAPI ne le dit pas ───────────────
+
+#: Les quatre collections dont l'enveloppe porte AUSSI une pagination par
+#: offset, observées contre une instance réelle le 2026-09-04 par
+#: `scripts/compare_real.py`.
+AVEC_OFFSET = ("journals", "ledger_accounts", "ledger_entries", "fiscal_years")
+
+#: Un échantillon de celles qui ne la portent PAS — dont
+#: `ledger_entry_lines`, de la même famille comptable que trois des quatre
+#: ci-dessus. C'est ce voisinage qui interdit de deviner une règle.
+SANS_OFFSET = ("ledger_entry_lines", "customers", "suppliers", "transactions", "products")
+
+CLES_OFFSET = {"current_page", "per_page", "total_items", "total_pages"}
+CLES_CURSEUR = {"items", "has_more", "next_cursor"}
+
+
+@pytest.mark.parametrize("collection", AVEC_OFFSET)
+def test_ces_quatre_collections_rendent_AUSSI_l_offset_mais_VIDE(client, collection):
+    """Le mock affirmait « exactement trois clés » sur la foi de l'OpenAPI.
+
+    Confronté à une instance réelle, c'est faux deux fois : ces quatre-là
+    ajoutent `current_page`, `per_page`, `total_items` et `total_pages` — et
+    les quatre valent `null`. Présentes et vides.
+
+    C'est le piège à reproduire : un consommateur qui teste leur PRÉSENCE pour
+    choisir son mode de pagination les trouve, bascule sur l'offset, et lit
+    `null` partout — sans une erreur. Les CALCULER, comme le faisait la
+    première version de ce correctif, serait plus utile et donc plus faux : un
+    mock qui rend un total là où le fournisseur rend `null` valide du code qui
+    casse en production.
+    """
+    corps = client.get(f"{BASE}/{collection}?limit=2", headers=H).json()
+    assert set(corps) >= CLES_CURSEUR, "le curseur reste la voie sûre, partout"
+    assert set(corps) >= CLES_OFFSET, f"{collection} doit porter les clés d'offset"
+    assert all(corps[cle] is None for cle in CLES_OFFSET), (
+        f"{collection} : les clés d'offset doivent être NULLES — le fournisseur "
+        "ne les remplit pas sous pagination par curseur."
+    )
+
+
+@pytest.mark.parametrize("collection", SANS_OFFSET)
+def test_les_autres_ne_la_rendent_PAS(client, collection):
+    """L'asymétrie est le fait à reproduire, pas un détail à lisser.
+
+    `ledger_entry_lines` est de la même famille comptable que `ledger_entries`
+    et n'a pas l'offset. Il n'y a donc aucune règle à deviner — seulement une
+    observation. Servir l'offset partout serait aussi faux que nulle part, et
+    inventerait un troisième dialecte qui n'existe chez personne.
+    """
+    corps = client.get(f"{BASE}/{collection}?limit=2", headers=H).json()
+    assert set(corps) == CLES_CURSEUR, f"{collection} ne doit rendre que le curseur"
+
+
+def test_l_offset_reste_nul_meme_en_avancant(client):
+    """Inerte veut dire inerte : rien ne se remplit à la page suivante.
+
+    Ce test disait l'inverse tant que le mock calculait les valeurs. Il vaut
+    d'être gardé retourné : c'est la trace de l'erreur, et la garantie qu'on ne
+    la refera pas en trouvant les `null` « inutiles ».
+    """
+    premiere = client.get(f"{BASE}/ledger_entries?limit=1", headers=H).json()
+    if not premiere["has_more"]:
+        pytest.skip("jeu de données trop court pour une seconde page")
+    suivante = client.get(
+        f"{BASE}/ledger_entries?limit=1&cursor={premiere['next_cursor']}", headers=H
+    ).json()
+    assert all(suivante[cle] is None for cle in CLES_OFFSET)
+    assert suivante["next_cursor"] != premiere["next_cursor"], "le curseur, lui, avance"

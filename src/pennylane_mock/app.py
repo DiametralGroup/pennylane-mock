@@ -86,7 +86,7 @@ from .settings import settings
 from .state import state
 
 PREFIXE = "/api/external/v2"
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -110,6 +110,11 @@ class RessourceSpec:
     #: l'ignore alors silencieusement, comme lui — refuser serait plus sévère
     #: que le réel, et un consommateur calerait ici sans caler en production.
     filtrable: bool = True
+    #: Les listes dont l'enveloppe porte AUSSI une pagination par offset
+    #: (`current_page`, `per_page`, `total_items`, `total_pages`). Quatre sur
+    #: seize, observées le 2026-09-04 — et pas `ledger_entry_lines`, pourtant
+    #: de la même famille. Aucune règle à deviner : on reproduit ce qu'on a vu.
+    pagination_offset: bool = False
 
 
 #: Les scopes viennent de l'OpenAPI officiel, opération par opération. Un
@@ -117,13 +122,16 @@ class RessourceSpec:
 #: readonly : `auth.scope_accorde` accepte `x:all` par-dessus.
 RESSOURCES: tuple[RessourceSpec, ...] = (
     # ── Comptabilité ────────────────────────────────────────────────────────
-    RessourceSpec("journals", "journals", Journal, "journals:readonly", "journal"),
+    RessourceSpec(
+        "journals", "journals", Journal, "journals:readonly", "journal", pagination_offset=True
+    ),
     RessourceSpec(
         "ledger_accounts",
         "ledger_accounts",
         ComptePlan,
         "ledger_accounts:readonly",
         "ledgerAccount",
+        pagination_offset=True,
     ),
     RessourceSpec(
         "ledger_entries",
@@ -131,6 +139,7 @@ RESSOURCES: tuple[RessourceSpec, ...] = (
         Ecriture,
         "ledger_entries:readonly",
         "ledgerEntry",
+        pagination_offset=True,
     ),
     RessourceSpec(
         "ledger_entry_lines",
@@ -147,6 +156,7 @@ RESSOURCES: tuple[RessourceSpec, ...] = (
         "fiscalYear",
         avec_detail=False,
         filtrable=False,
+        pagination_offset=True,
     ),
     # ── Analytique ──────────────────────────────────────────────────────────
     RessourceSpec("categories", "categories", Categorie, "categories:readonly", "category"),
@@ -745,6 +755,7 @@ def _page(
     tri_defaut: str,
     filtrable: bool,
     maximum: int | None = None,
+    pagination_offset: bool = False,
 ) -> dict[str, Any] | Response:
     """Filtre, trie, pagine — dans cet ordre, qui est le seul correct.
 
@@ -764,6 +775,7 @@ def _page(
             curseur=request.query_params.get("cursor"),
             limite=limite,
             cle=tri_defaut.lstrip("-") if tri_defaut.lstrip("-") in {"id"} else "id",
+            offset=pagination_offset,
         )
     except (FiltreInvalide, TriInvalide, LimiteInvalide, CurseurInvalide) as exc:
         return erreur(400, str(exc))
@@ -1070,6 +1082,7 @@ def _monter_ressource(spec: RessourceSpec) -> None:
                 request,
                 tri_defaut=spec.tri_defaut,
                 filtrable=spec.filtrable,
+                pagination_offset=spec.pagination_offset,
             )
             if isinstance(resultat, Response):
                 return resultat

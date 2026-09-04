@@ -103,6 +103,7 @@ def paginer(
     curseur: str | None,
     limite: int,
     cle: str = "id",
+    offset: bool = False,
 ) -> dict[str, Any]:
     """Découpe une liste DÉJÀ triée et filtrée en une page du dialecte.
 
@@ -128,4 +129,32 @@ def paginer(
     suivant: str | None = None
     if reste and page:
         suivant = encoder_curseur({"after": depart + len(page), "key": page[-1].get(cle)})
-    return {"items": page, "has_more": reste, "next_cursor": suivant}
+    corps: dict[str, Any] = {"items": page, "has_more": reste, "next_cursor": suivant}
+    if offset:
+        # ┌─ QUATRE CLÉS EN PLUS, INERTES, SUR QUATRE COLLECTIONS SEULEMENT ───┐
+        # │ Observé le 2026-09-04 contre une instance réelle : `journals`,     │
+        # │ `ledger_accounts`, `ledger_entries` et `fiscal_years` rendent une  │
+        # │ pagination par OFFSET à côté du curseur. Pas `ledger_entry_lines`, │
+        # │ pourtant de la même famille — aucune règle à deviner, seulement    │
+        # │ une observation à reproduire.                                      │
+        # │                                                                     │
+        # │ Et le piège est là : les quatre clés valent `null`. Elles sont      │
+        # │ PRÉSENTES et VIDES. Un consommateur qui testerait leur présence     │
+        # │ pour choisir son mode de pagination les trouverait, basculerait sur │
+        # │ l'offset, et lirait `null` partout — sans une erreur.               │
+        # │                                                                     │
+        # │ La première version de ce correctif les CALCULAIT, ce qui était     │
+        # │ plus utile et donc plus faux : un mock qui rend un total là où le   │
+        # │ fournisseur rend `null` valide du code qui casse en production.     │
+        # │ `scripts/compare_real.py` l'a dit au premier passage.               │
+        # │                                                                     │
+        # │ Non observé, donc non reproduit : ce que rendent ces clés si l'on   │
+        # │ pagine par `page`/`per_page`. Le mock n'accepte pas ces paramètres, │
+        # │ et l'inventer serait un troisième dialecte. Cf.                     │
+        # │ docs/UNVERIFIED-FIELDS.md.                                          │
+        # └─────────────────────────────────────────────────────────────────────┘
+        corps["current_page"] = None
+        corps["per_page"] = None
+        corps["total_items"] = None
+        corps["total_pages"] = None
+    return corps
