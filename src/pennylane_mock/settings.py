@@ -128,6 +128,28 @@ class Settings:
     #: consommateur doit rencontrer en test, pas en production.
     changelog_retention_days: int = 28
 
+    #: Sert les champs FACULTATIFS que le locataire réel ne renseigne jamais.
+    #:
+    #: ┌─ POURQUOI LE DÉFAUT EST « NON » ────────────────────────────────────┐
+    #: │ `analytical_code` (catégories et ventilations), `product` (ligne de │
+    #: │ facture client) et `ledger_account` (ligne de facture fournisseur)  │
+    #: │ sont déclarés par l'OpenAPI, servis par l'API — et `null` sur 100 % │
+    #: │ des lignes du locataire relevé le 2026-09-07 : 0 code analytique    │
+    #: │ sur 159 catégories, aucun produit sur 1 898 factures client, aucun  │
+    #: │ compte sur 4 559 factures fournisseur.                              │
+    #: │                                                                      │
+    #: │ Le mock les remplissait TOUJOURS. Un consommateur qui les lit était │
+    #: │ donc vert en développement et rouge en production — et pas d'un     │
+    #: │ « valeur nulle » mais d'un « column does not exist », parce qu'un   │
+    #: │ chargeur qui infère son schéma ne matérialise pas une colonne dont  │
+    #: │ il n'a jamais vu de valeur. C'est arrivé, et c'est ce que ce défaut │
+    #: │ existe pour reproduire.                                             │
+    #: │                                                                      │
+    #: │ Mettre à `1` restaure la forme riche : elle reste légitime, un      │
+    #: │ autre locataire peut très bien renseigner ces trois champs.          │
+    #: └──────────────────────────────────────────────────────────────────────┘
+    champs_facultatifs_servis: bool = False
+
     extra: dict[str, str] = field(default_factory=dict)
 
     def reload(self) -> None:
@@ -157,6 +179,7 @@ class Settings:
         self.changelog_retention_days = int(
             os.environ.get("PENNYLANE_MOCK_CHANGELOG_RETENTION_DAYS", "28")
         )
+        self.champs_facultatifs_servis = _flag("PENNYLANE_MOCK_OPTIONAL_FIELDS", False)
 
 
 settings = Settings()

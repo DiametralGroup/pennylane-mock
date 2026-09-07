@@ -131,6 +131,36 @@ Three traps reproduced on purpose, because they are silent in production:
 3. **The default sort is `-id`** — descending. A consumer that assumes ascending
    order anchors its checkpoint on the newest row and never sees anything again.
 
+### What the vendor declares and never fills
+
+Three fields are declared by the OpenAPI, served by the API — and `null` on
+100 % of the rows of a real tenant (surveyed 2026-09-07):
+
+| Field | Where | Observed |
+|---|---|---|
+| `analytical_code` | `Categorie`, and the ventilation copy on entries, entry lines and transactions | `null` on 159 categories out of 159 |
+| `product` | customer invoice line | not one of 1 898 invoices fills it |
+| `ledger_account` | supplier invoice line | not one of 4 559 |
+
+This mock now serves them **`null` by default** — the key is present, the value
+is not. The distinction matters: a consumer that infers its schema from the
+data does not materialise a column it has never seen a value for, so the
+failure is not *"a null value"* but *"column does not exist"*, weeks later, in
+production. That happened. Set `PENNYLANE_MOCK_OPTIONAL_FIELDS=1` to serve the
+rich shape — it stays legitimate, another tenant may well fill these three.
+
+### `vat_rate` is a code, not a percentage
+
+A ledger account's `vat_rate` is a **rate code**, and the non-numeric ones are
+the majority: `any` (2 633 accounts on the surveyed tenant), `FR_200` (166),
+`exempt` (141), `extracom` (51), `crossborder` (40), then `FR_100`, `FR_55`,
+`FR_15_385`. Up to 0.2.0 this mock served `"0.0"` and `"20.0"` — a consumer
+casting the value to a number passed against the mock and failed against the
+vendor on the very first `any`.
+
+The mock does not decode the code into a percentage, and neither should you:
+`FR_200` → 20 % is a readable *shape*, not a documented rule.
+
 ## The dataset: Boréal Conseil's books
 
 One coherent world, deterministic at seed **42**, anchored at **2026-07-15** —
@@ -267,6 +297,7 @@ content would notice.
 | `PENNYLANE_MOCK_MAX_LIMIT_CHANGELOG` | `1000` | changelog cap |
 | `PENNYLANE_MOCK_RATE_LIMIT` / `_RATE_WINDOW` | `25` / `5` | advertised in `ratelimit-*` |
 | `PENNYLANE_MOCK_CHANGELOG_RETENTION_DAYS` | `28` | the 4-week window |
+| `PENNYLANE_MOCK_OPTIONAL_FIELDS` | `false` | serve `analytical_code`, `product` and `ledger_account` — the vendor never fills them |
 | `PENNYLANE_MOCK_COMPANY` / `_COMPANY_ID` / `_COMPANY_REG_NO` | `Boréal Conseil` / … | what `/me` reports |
 | `PENNYLANE_MOCK_RATE_LIMIT_AFTER` / `_RETRY_AFTER` | unset | a baseline injection rule re-applied on every reset |
 | `PENNYLANE_MOCK_HOST` / `_PORT` | `0.0.0.0` / `8000` | uvicorn bind |

@@ -281,7 +281,12 @@ class Evolution:
                 "amount": _euros(ttc),
                 "currency_amount": _euros(ttc),
                 "description": produit["description"],
-                "product": _ref(produit["id"], "/products"),
+                # Même gommage qu'à la construction du jeu : ce que le mock
+                # SERT suit le fournisseur, qui ne renseigne jamais ce champ.
+                # Cf. `Settings.champs_facultatifs_servis`.
+                "product": (
+                    _ref(produit["id"], "/products") if settings.champs_facultatifs_servis else None
+                ),
                 "vat_rate": produit["vat_rate"],
                 "currency_amount_before_tax": _euros(ht),
                 "currency_tax": _euros(tva),
@@ -385,7 +390,11 @@ class Evolution:
                 "vat_rate": "FR_200",
                 "raw_currency_unit_price": _euros(ht),
                 "description": "Ligne unique.",
-                "ledger_account": {"id": grand.compte(compte_charge)["id"]},
+                "ledger_account": (
+                    {"id": grand.compte(compte_charge)["id"]}
+                    if settings.champs_facultatifs_servis
+                    else None
+                ),
                 "created_at": horodatage,
                 "updated_at": horodatage,
             }
