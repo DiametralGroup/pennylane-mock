@@ -62,7 +62,16 @@ class ComptePlan(Permissif):
     id: int
     number: str = Field(description="Numéro de compte ; un auxiliaire porte des lettres.")
     label: str
-    vat_rate: str = Field(description="Taux de TVA du compte, en pourcentage, EN CHAÎNE.")
+    vat_rate: str = Field(
+        description=(
+            "Un CODE de taux, pas un pourcentage : `any` (l'écrasante majorité "
+            "des comptes), `exempt`, `extracom`, `crossborder`, ou `FR_200`, "
+            "`FR_55`, `FR_15_385`… Il était décrit ici comme un pourcentage en "
+            "chaîne, et le mock servait « 20.0 » — un consommateur qui le "
+            "castait en numérique passait sur le mock et tombait sur le "
+            "premier `any` du fournisseur."
+        )
+    )
     country_alpha2: str
     enabled: bool
     type: str = Field(

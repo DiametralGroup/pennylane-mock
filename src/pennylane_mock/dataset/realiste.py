@@ -45,6 +45,8 @@ import random
 from datetime import date, timedelta
 from typing import Any
 
+from ..settings import settings
+
 # ── Ancre temporelle ─────────────────────────────────────────────────────────
 
 #: Identique à celle de boondmanager-mock, linkedin-mock et ga-mock.
@@ -170,26 +172,41 @@ _PARTICULIERS: tuple[tuple[str, str, str, str, str], ...] = (
 #: Le plan comptable servi : (numéro, libellé, type, lettrable, taux de TVA).
 #: Réduit à ce que la vie de l'entreprise met réellement en mouvement — un
 #: PCG complet ferait 400 comptes dont 390 à zéro, ce qui n'éprouve rien.
+#: ┌─ `vat_rate` EST UN CODE, PAS UN POURCENTAGE ───────────────────────────────┐
+#: │ Le mock servait « 0.0 » et « 20.0 ». Le fournisseur sert un CODE de taux,  │
+#: │ relevé sur un locataire réel le 2026-09-07 : `any` (2 633 comptes),        │
+#: │ `FR_200` (166), `exempt` (141), `extracom` (51), `crossborder` (40),       │
+#: │ `FR_100` (19), `FR_55` (17), et jusqu'à `FR_15_385`.                       │
+#: │                                                                             │
+#: │ La différence n'est pas cosmétique : un consommateur qui castait la valeur │
+#: │ en numérique passait sur le mock et tombait en production sur le premier   │
+#: │ `any` — « invalid input syntax for type numeric ». Et `any` est de loin la │
+#: │ valeur la plus répandue, donc l'échec était certain, pas probable.         │
+#: │                                                                             │
+#: │ `any` est ici le défaut, comme chez le fournisseur : un compte qui         │
+#: │ n'impose aucun taux particulier. `exempt` sur les services bancaires n'est │
+#: │ pas décoratif — ils sont exonérés de TVA.                                   │
+#: └─────────────────────────────────────────────────────────────────────────────┘
 _PLAN: tuple[tuple[str, str, str, bool, str], ...] = (
-    ("101000", "Capital social", "equity", False, "0.0"),
-    ("110000", "Report à nouveau", "equity", False, "0.0"),
-    ("401000", "Fournisseurs", "supplier", True, "0.0"),
-    ("411000", "Clients", "customer", True, "0.0"),
-    ("445660", "TVA déductible sur autres biens et services", "tax", False, "20.0"),
-    ("471000", "Compte d'attente", "suspense", True, "0.0"),
-    ("445710", "TVA collectée", "tax", False, "20.0"),
-    ("512000", "Banque — compte courant", "bank", True, "0.0"),
-    ("512100", "Banque — compte de réserve", "bank", True, "0.0"),
-    ("604000", "Achats d'études et prestations de services", "expense", False, "20.0"),
-    ("606300", "Fournitures d'entretien et petit équipement", "expense", False, "20.0"),
-    ("613200", "Locations immobilières", "expense", False, "20.0"),
-    ("626000", "Frais postaux et de télécommunications", "expense", False, "20.0"),
-    ("627000", "Services bancaires et assimilés", "expense", False, "0.0"),
-    ("641100", "Salaires et appointements", "expense", False, "0.0"),
-    ("645000", "Charges de sécurité sociale et de prévoyance", "expense", False, "0.0"),
-    ("651600", "Droits d'auteur et de reproduction", "expense", False, "20.0"),
-    ("706000", "Prestations de services", "income", False, "20.0"),
-    ("706100", "Formations", "income", False, "20.0"),
+    ("101000", "Capital social", "equity", False, "any"),
+    ("110000", "Report à nouveau", "equity", False, "any"),
+    ("401000", "Fournisseurs", "supplier", True, "any"),
+    ("411000", "Clients", "customer", True, "any"),
+    ("445660", "TVA déductible sur autres biens et services", "tax", False, "FR_200"),
+    ("471000", "Compte d'attente", "suspense", True, "any"),
+    ("445710", "TVA collectée", "tax", False, "FR_200"),
+    ("512000", "Banque — compte courant", "bank", True, "any"),
+    ("512100", "Banque — compte de réserve", "bank", True, "any"),
+    ("604000", "Achats d'études et prestations de services", "expense", False, "FR_200"),
+    ("606300", "Fournitures d'entretien et petit équipement", "expense", False, "FR_200"),
+    ("613200", "Locations immobilières", "expense", False, "FR_200"),
+    ("626000", "Frais postaux et de télécommunications", "expense", False, "FR_200"),
+    ("627000", "Services bancaires et assimilés", "expense", False, "exempt"),
+    ("641100", "Salaires et appointements", "expense", False, "any"),
+    ("645000", "Charges de sécurité sociale et de prévoyance", "expense", False, "any"),
+    ("651600", "Droits d'auteur et de reproduction", "expense", False, "FR_100"),
+    ("706000", "Prestations de services", "income", False, "FR_200"),
+    ("706100", "Formations", "income", False, "exempt"),
 )
 
 #: (code, libellé) — les journaux d'une petite ESN.
@@ -311,7 +328,9 @@ def _compte_auxiliaire(ident: int, numero: str, libelle: str, type_: str) -> dic
         "id": ident,
         "number": numero,
         "label": libelle,
-        "vat_rate": "0.0",
+        # `any` — c'est la valeur du fournisseur sur l'écrasante majorité des
+        # comptes, auxiliaires compris : un compte de tiers n'impose pas de taux.
+        "vat_rate": "any",
         "country_alpha2": PAYS,
         "enabled": True,
         "type": type_,
@@ -2140,5 +2159,63 @@ def build_realiste_dataset(seed: int = 42) -> dict[str, Any]:
         "matched_transactions_par_facture_client": apparie_client,
         "matched_transactions_par_facture_fournisseur": apparie_fournisseur,
     }
+    _gommer_champs_facultatifs(donnees)
     donnees["changelogs"] = _journal_des_changements(donnees)
     return donnees
+
+
+#: (collection, champ) — les champs FACULTATIFS que le locataire réel relevé
+#: n'a jamais renseignés. Cf. l'encadré de `Settings.champs_facultatifs_servis`.
+CHAMPS_FACULTATIFS: tuple[tuple[str, str], ...] = (
+    ("categories", "analytical_code"),
+    ("customer_invoice_lines", "product"),
+    ("supplier_invoice_lines", "ledger_account"),
+)
+
+
+def _gommer_champs_facultatifs(donnees: dict[str, Any]) -> None:
+    """Met à `null` les champs facultatifs, sauf si l'environnement les demande.
+
+    Le geste est fait sur le jeu CONSTRUIT et non à la génération : le monde
+    reste cohérent (une ligne de vente SAIT de quel produit elle vient, et les
+    montants en découlent), c'est seulement ce qui est SERVI qui s'aligne sur
+    ce que le fournisseur sert vraiment.
+
+    ⚠️ Passer à `null` et non SUPPRIMER la clé : l'OpenAPI déclare les trois
+    champs, et le fournisseur les rend bien — à `null`. Un mock qui les
+    omettrait serait divergent dans l'autre sens, et cacherait au consommateur
+    que la clé existe.
+    """
+    if settings.champs_facultatifs_servis:
+        return
+
+    def _elements(valeur: Any) -> list[dict[str, Any]]:
+        """Les lignes d'une collection, qu'elle soit une liste ou un index.
+
+        Les LIGNES de facture sont rangées par facture (`{id: [ligne, …]}`) et
+        non à plat : les traiter comme une liste itérerait sur les clés, ne
+        modifierait rien, et le gommage passerait pour appliqué.
+        """
+        if isinstance(valeur, list):
+            return [e for e in valeur if isinstance(e, dict)]
+        if isinstance(valeur, dict):
+            return [e for lot in valeur.values() if isinstance(lot, list) for e in lot]
+        return []
+
+    for collection, champ in CHAMPS_FACULTATIFS:
+        for element in _elements(donnees.get(collection)):
+            if champ in element:
+                element[champ] = None
+
+    # Les VENTILATIONS portent une copie du code analytique de leur catégorie.
+    # Les oublier laisserait le mock se contredire : la catégorie sans code, la
+    # ventilation qui la vise avec — et un consommateur qui lit la seconde
+    # resterait vert. Elles sont imbriquées dans les porteurs, pas dans une
+    # collection à elles.
+    for collection in ("ledger_entries", "ledger_entry_lines", "transactions"):
+        for porteur in donnees.get(collection, []):
+            if not isinstance(porteur, dict):
+                continue
+            for ventilation in porteur.get("categories") or []:
+                if isinstance(ventilation, dict) and "analytical_code" in ventilation:
+                    ventilation["analytical_code"] = None
