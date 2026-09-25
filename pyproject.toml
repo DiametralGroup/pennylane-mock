@@ -4,6 +4,7 @@ version = "0.3.0"
 description = "Pennylane Company API v2 mock — the accounting view of the Boréal Conseil world"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
 # Le périmètre des dépendances est une décision, pas un accident : FastAPI et
 # uvicorn, rien d'autre. Le curseur de pagination est du base64 de JSON — de la
 # stdlib — et l'authentification est un Bearer statique : aucune crypto tierce
