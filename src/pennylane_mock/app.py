@@ -1,28 +1,26 @@
-"""Assemblage de l'application FastAPI.
+"""FastAPI application assembly.
 
-┌─ UN SEUL PIPELINE DE REQUÊTE ───────────────────────────────────────────────┐
-│ Toute route de la surface fournisseur passe par `_prelude` :                 │
+┌─ A SINGLE REQUEST PIPELINE ──────────────────────────────────────────────────┐
+│ Every route on the provider surface goes through `_prelude`:                │
 │                                                                              │
-│     évolution → observation → injections → jeton → scope → handler           │
+│     evolution → observation → injections → token → scope → handler         │
 │                                                                              │
-│ Les pannes sont dispatchées AVANT l'authentification, pour qu'un             │
-│ `auth_reject` puisse la préempter. Il ne peut donc pas exister de route      │
-│ « oubliée » où les pannes ne s'appliqueraient pas, ni où le scope ne serait  │
-│ pas vérifié — c'est ce que garantit la fabrique de routes plutôt qu'une      │
-│ discipline de relecture.                                                     │
+│ Failures are dispatched BEFORE authentication, so that an `auth_reject`     │
+│ can preempt it. There can therefore be no "forgotten" route where failures  │
+│ wouldn't apply, or where the scope wouldn't be checked — that's what the    │
+│ route factory guarantees rather than a review discipline.                  │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-┌─ UNE TABLE DÉCLARATIVE, PAS 91 HANDLERS ────────────────────────────────────┐
-│ La surface v2 en lecture compte 91 opérations GET. Les écrire à la main      │
-│ produirait 91 occasions d'oublier un scope, un tri par défaut ou une         │
-│ enveloppe de pagination. `RESSOURCES` et `SOUS_RESSOURCES` les décrivent ;   │
-│ la fabrique les monte. Ajouter une ressource, c'est une ligne de table plus  │
-│ une clé dans le jeu de données.                                              │
+┌─ ONE DECLARATIVE TABLE, NOT 91 HANDLERS ────────────────────────────────────┐
+│ The read-only v2 surface counts 91 GET operations. Writing them by hand     │
+│ would produce 91 chances to forget a scope, a default sort or a pagination  │
+│ envelope. `RESOURCES` and `SUB_RESOURCES` describe them; the factory mounts │
+│ them. Adding a resource is one table row plus one key in the dataset.       │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-Les écritures (POST/PUT/DELETE) sont HORS PÉRIMÈTRE : le consommateur de ce
-mock lit, il n'écrit pas. Elles rendent 404 au dialecte Pennylane — le
-fournisseur, lui, les servirait ; l'écart est inscrit dans docs/EXTRACTION.md.
+Writes (POST/PUT/DELETE) are OUT OF SCOPE: this mock's consumer reads, it
+doesn't write. They render 404 in the Pennylane dialect — the provider would
+actually serve them; the gap is logged in docs/EXTRACTION.md.
 """
 
 from __future__ import annotations
@@ -38,346 +36,345 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import changelog as chg
-from .auth import jeton_de_l_entete, jeton_est_valide, scope_accorde
+from .auth import scope_granted, token_from_header, token_is_valid
 from .errors import (
-    entetes_debit,
-    erreur,
-    erreur_debit,
-    erreur_introuvable,
-    erreur_jeton,
-    erreur_scope,
+    error,
+    not_found_error,
+    rate_limit_error,
+    rate_limit_headers,
+    scope_error,
+    token_error,
 )
-from .filtres import (
-    FiltreInvalide,
-    TriInvalide,
-    analyser_filtre,
-    appliquer_filtre,
-    appliquer_tri,
+from .filters import (
+    InvalidFilter,
+    InvalidSort,
+    apply_filter,
+    apply_sort,
+    parse_filter,
 )
 from .injection import engine
 from .models import (
-    REPONSES_ERREUR,
-    Categorie,
-    CompteBancaire,
-    ComptePlan,
+    ERROR_RESPONSES,
+    BankAccount,
+    BankEstablishment,
+    Category,
+    CategoryGroup,
+    ChangelogEvent,
     Contact,
-    Ecriture,
-    ElementGenerique,
-    EtablissementBancaire,
-    EvenementChangelog,
-    Exercice,
-    FactureClient,
-    FactureFournisseur,
-    Fournisseur,
-    GroupeCategories,
+    Customer,
+    CustomerInvoice,
+    FiscalYear,
+    GenericElement,
+    InvoiceLine,
     Journal,
-    LigneBalance,
-    LigneEcriture,
-    LigneFacture,
+    LedgerAccount,
+    LedgerEntry,
+    LedgerEntryLine,
     Page,
-    Produit,
-    ProfilUtilisateur,
-    Reglement,
-    TiersClient,
+    Payment,
+    Product,
+    Supplier,
+    SupplierInvoice,
     Transaction,
+    TrialBalanceLine,
+    UserProfile,
 )
-from .pagination import CurseurInvalide, LimiteInvalide, limite_demandee, paginer
+from .pagination import InvalidCursor, InvalidLimit, paginate, requested_limit
 from .settings import settings
 from .state import state
 
-PREFIXE = "/api/external/v2"
+PREFIX = "/api/external/v2"
 VERSION = "0.2.0"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  La table des ressources
+#  The resource table
 # ═════════════════════════════════════════════════════════════════════════════
 
 
 @dataclass(frozen=True)
-class RessourceSpec:
-    """Ce qu'il faut savoir d'une ressource pour la servir ET la documenter."""
+class ResourceSpec:
+    """What's needed to serve a resource AND document it."""
 
-    chemin: str  # segment d'URL sous /api/external/v2
-    cle: str  # clé dans le jeu de données
-    modele: type  # modèle pydantic de l'élément — la source du contrat
-    scope: str | None  # scope requis ; None = aucun
-    singulier: str  # nom d'entité au singulier (documentation)
-    avec_liste: bool = True
-    avec_detail: bool = True
-    tri_defaut: str = "-id"
-    #: Les listes qui n'acceptent PAS `filter` chez le fournisseur. Le mock
-    #: l'ignore alors silencieusement, comme lui — refuser serait plus sévère
-    #: que le réel, et un consommateur calerait ici sans caler en production.
-    filtrable: bool = True
-    #: Les listes dont l'enveloppe porte AUSSI une pagination par offset
-    #: (`current_page`, `per_page`, `total_items`, `total_pages`). Quatre sur
-    #: seize, observées le 2026-09-04 — et pas `ledger_entry_lines`, pourtant
-    #: de la même famille. Aucune règle à deviner : on reproduit ce qu'on a vu.
+    path: str  # URL segment under /api/external/v2
+    key: str  # key in the dataset
+    model: type  # pydantic model of the element — the contract's source
+    scope: str | None  # required scope; None = none
+    singular: str  # singular entity name (documentation)
+    with_list: bool = True
+    with_detail: bool = True
+    default_sort: str = "-id"
+    #: Lists that do NOT accept `filter` at the provider. The mock silently
+    #: ignores it then, like the provider does — refusing it would be
+    #: stricter than reality, and a consumer would stall here without
+    #: stalling in production.
+    filterable: bool = True
+    #: Lists whose envelope ALSO carries offset pagination (`current_page`,
+    #: `per_page`, `total_items`, `total_pages`). Four out of sixteen,
+    #: observed on 2026-09-04 — and not `ledger_entry_lines`, although it's
+    #: in the same family. No rule to guess: we reproduce what was observed.
     pagination_offset: bool = False
 
 
-#: Les scopes viennent de l'OpenAPI officiel, opération par opération. Un
-#: endpoint documenté « one of x:readonly, x:all » se déclare avec la variante
-#: readonly : `auth.scope_accorde` accepte `x:all` par-dessus.
-RESSOURCES: tuple[RessourceSpec, ...] = (
-    # ── Comptabilité ────────────────────────────────────────────────────────
-    RessourceSpec(
+#: Scopes come from the official OpenAPI, operation by operation. An
+#: endpoint documented as "one of x:readonly, x:all" is declared with the
+#: readonly variant: `auth.scope_granted` accepts `x:all` on top of it.
+RESOURCES: tuple[ResourceSpec, ...] = (
+    # ── Accounting ────────────────────────────────────────────────────────
+    ResourceSpec(
         "journals", "journals", Journal, "journals:readonly", "journal", pagination_offset=True
     ),
-    RessourceSpec(
+    ResourceSpec(
         "ledger_accounts",
         "ledger_accounts",
-        ComptePlan,
+        LedgerAccount,
         "ledger_accounts:readonly",
         "ledgerAccount",
         pagination_offset=True,
     ),
-    RessourceSpec(
+    ResourceSpec(
         "ledger_entries",
         "ledger_entries",
-        Ecriture,
+        LedgerEntry,
         "ledger_entries:readonly",
         "ledgerEntry",
         pagination_offset=True,
     ),
-    RessourceSpec(
+    ResourceSpec(
         "ledger_entry_lines",
         "ledger_entry_lines",
-        LigneEcriture,
+        LedgerEntryLine,
         "ledger_entries:readonly",
         "ledgerEntryLine",
     ),
-    RessourceSpec(
+    ResourceSpec(
         "fiscal_years",
         "fiscal_years",
-        Exercice,
+        FiscalYear,
         "fiscal_years:readonly",
         "fiscalYear",
-        avec_detail=False,
-        filtrable=False,
+        with_detail=False,
+        filterable=False,
         pagination_offset=True,
     ),
-    # ── Analytique ──────────────────────────────────────────────────────────
-    RessourceSpec("categories", "categories", Categorie, "categories:readonly", "category"),
-    RessourceSpec(
+    # ── Analytics ─────────────────────────────────────────────────────────
+    ResourceSpec("categories", "categories", Category, "categories:readonly", "category"),
+    ResourceSpec(
         "category_groups",
         "category_groups",
-        GroupeCategories,
+        CategoryGroup,
         "categories:readonly",
         "categoryGroup",
-        filtrable=False,
+        filterable=False,
     ),
-    # ── Tiers ───────────────────────────────────────────────────────────────
-    RessourceSpec("customers", "customers", TiersClient, "customers:readonly", "customer"),
-    RessourceSpec("suppliers", "suppliers", Fournisseur, "suppliers:readonly", "supplier"),
-    RessourceSpec("products", "products", Produit, "products:readonly", "product"),
-    # ── Facturation ─────────────────────────────────────────────────────────
-    RessourceSpec(
+    # ── Third parties ─────────────────────────────────────────────────────
+    ResourceSpec("customers", "customers", Customer, "customers:readonly", "customer"),
+    ResourceSpec("suppliers", "suppliers", Supplier, "suppliers:readonly", "supplier"),
+    ResourceSpec("products", "products", Product, "products:readonly", "product"),
+    # ── Invoicing ─────────────────────────────────────────────────────────
+    ResourceSpec(
         "customer_invoices",
         "customer_invoices",
-        FactureClient,
+        CustomerInvoice,
         "customer_invoices:readonly",
         "customerInvoice",
     ),
-    RessourceSpec(
+    ResourceSpec(
         "supplier_invoices",
         "supplier_invoices",
-        FactureFournisseur,
+        SupplierInvoice,
         "supplier_invoices:readonly",
         "supplierInvoice",
     ),
-    RessourceSpec(
+    ResourceSpec(
         "customer_invoice_templates",
         "customer_invoice_templates",
-        ElementGenerique,
+        GenericElement,
         "customer_invoice_templates:readonly",
         "customerInvoiceTemplate",
-        avec_detail=False,
-        filtrable=False,
+        with_detail=False,
+        filterable=False,
     ),
-    RessourceSpec("quotes", "quotes", ElementGenerique, "quotes:readonly", "quote"),
-    RessourceSpec(
+    ResourceSpec("quotes", "quotes", GenericElement, "quotes:readonly", "quote"),
+    ResourceSpec(
         "commercial_documents",
         "commercial_documents",
-        ElementGenerique,
+        GenericElement,
         "commercial_documents:readonly",
         "commercialDocument",
     ),
-    RessourceSpec(
+    ResourceSpec(
         "billing_subscriptions",
         "billing_subscriptions",
-        ElementGenerique,
+        GenericElement,
         "billing_subscriptions:readonly",
         "billingSubscription",
     ),
-    RessourceSpec(
+    ResourceSpec(
         "purchase_requests",
         "purchase_requests",
-        ElementGenerique,
+        GenericElement,
         "purchase_requests:readonly",
         "purchaseRequest",
     ),
-    # ── Banque ──────────────────────────────────────────────────────────────
-    RessourceSpec(
+    # ── Banking ───────────────────────────────────────────────────────────
+    ResourceSpec(
         "bank_accounts",
         "bank_accounts",
-        CompteBancaire,
+        BankAccount,
         "bank_accounts:readonly",
         "bankAccount",
-        filtrable=False,
+        filterable=False,
     ),
-    RessourceSpec(
+    ResourceSpec(
         "bank_establishments",
         "bank_establishments",
-        EtablissementBancaire,
+        BankEstablishment,
         "bank_establishments:readonly",
         "bankEstablishment",
-        avec_detail=False,
+        with_detail=False,
     ),
-    RessourceSpec(
+    ResourceSpec(
         "transactions",
         "transactions",
         Transaction,
         "transactions:readonly",
         "transaction",
     ),
-    # ── Mandats ─────────────────────────────────────────────────────────────
-    RessourceSpec(
+    # ── Mandates ──────────────────────────────────────────────────────────
+    ResourceSpec(
         "sepa_mandates",
         "sepa_mandates",
-        ElementGenerique,
+        GenericElement,
         "customer_mandates:readonly",
         "sepaMandate",
     ),
-    RessourceSpec(
+    ResourceSpec(
         "gocardless_mandates",
         "gocardless_mandates",
-        ElementGenerique,
+        GenericElement,
         "customer_mandates:readonly",
         "gocardlessMandate",
     ),
-    RessourceSpec(
+    ResourceSpec(
         "pro_account/mandates",
         "pro_account_mandates",
-        ElementGenerique,
+        GenericElement,
         "customer_mandates:readonly",
         "proAccountMandate",
-        avec_detail=False,
+        with_detail=False,
     ),
-    RessourceSpec(
+    ResourceSpec(
         "pro_account/mandate_migrations",
         "pro_account_mandate_migrations",
-        ElementGenerique,
+        GenericElement,
         "customer_mandates:readonly",
         "proAccountMandateMigration",
-        avec_detail=False,
+        with_detail=False,
     ),
 )
 
 
 @dataclass(frozen=True)
-class SousRessourceSpec:
-    """Une collection accessible SOUS un élément — `/customer_invoices/{id}/payments`.
+class SubResourceSpec:
+    """A collection reachable UNDER an element — `/customer_invoices/{id}/payments`.
 
-    Ces routes existent parce que la v2 sert des LIENS et non des tableaux
-    imbriqués : sans elles, une facture ne donnerait jamais accès à ses lignes.
+    These routes exist because v2 serves LINKS, not nested arrays: without
+    them, an invoice would never give access to its lines.
     """
 
-    parent: str  # segment du parent
-    parent_cle: str  # clé du parent dans le jeu de données
-    chemin: str  # segment de la sous-collection
-    modele: type
+    parent: str  # parent segment
+    parent_key: str  # parent's key in the dataset
+    path: str  # sub-collection segment
+    model: type
     scope: str | None
-    #: (dataset, élément parent) → la liste à paginer.
-    resoudre: Callable[[dict[str, Any], dict[str, Any]], list[dict[str, Any]]]
-    tri_defaut: str = "-id"
-    parametres: tuple[str, ...] = field(default_factory=lambda: ("cursor", "limit"))
+    #: (dataset, parent element) → the list to paginate.
+    resolve: Callable[[dict[str, Any], dict[str, Any]], list[dict[str, Any]]]
+    default_sort: str = "-id"
+    params: tuple[str, ...] = field(default_factory=lambda: ("cursor", "limit"))
 
 
-def _sous(cle: str) -> Callable[[dict[str, Any], dict[str, Any]], list[dict[str, Any]]]:
-    """Résolveur pour les collections indexées par identifiant de parent."""
+def _sub_resolver(key: str) -> Callable[[dict[str, Any], dict[str, Any]], list[dict[str, Any]]]:
+    """Resolver for collections indexed by parent id."""
 
-    def resoudre(donnees: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
-        return list(donnees[cle].get(parent["id"], []))
+    def resolve(data: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
+        return list(data[key].get(parent["id"], []))
 
-    return resoudre
+    return resolve
 
 
-def _vide(_donnees: dict[str, Any], _parent: dict[str, Any]) -> list[dict[str, Any]]:
-    """Une collection systématiquement vide, mais SERVIE.
+def _empty(_data: dict[str, Any], _parent: dict[str, Any]) -> list[dict[str, Any]]:
+    """A collection that's always empty, but SERVED.
 
-    Annexes, sections de lignes, champs d'en-tête personnalisés, fichiers GED :
-    Boréal Conseil n'en a aucun. La route existe quand même, et rend une page
-    vide bien formée — parce que c'est exactement ce qu'un connecteur doit
-    savoir traiter, et que la faire répondre 404 apprendrait le contraire.
+    Appendices, line sections, custom header fields, GED files: Boréal
+    Conseil has none. The route exists anyway, and renders a well-formed
+    empty page — because that's exactly what a connector must know how to
+    handle, and returning 404 would teach it the opposite.
     """
     return []
 
 
-def _lignes_ecriture(donnees: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
+def _ledger_entry_lines_of(data: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
     return [
-        ligne
-        for ligne in donnees["ledger_entry_lines"]
-        if ligne["ledger_entry"]["id"] == parent["id"]
+        line for line in data["ledger_entry_lines"] if line["ledger_entry"]["id"] == parent["id"]
     ]
 
 
-def _lignes_lettrees(donnees: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
-    identifiants = set(parent["lettered_ledger_entry_lines"]["ids"])
-    return [ligne for ligne in donnees["ledger_entry_lines"] if ligne["id"] in identifiants]
+def _lettered_lines(data: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
+    ids = set(parent["lettered_ledger_entry_lines"]["ids"])
+    return [line for line in data["ledger_entry_lines"] if line["id"] in ids]
 
 
-def _categories_de(donnees: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
-    """Les catégories analytiques portées par l'élément.
+def _categories_of(data: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
+    """The analytical categories carried by the element.
 
-    Une facture n'en porte pas directement : elle les tient de son écriture.
-    C'est ce chaînage que le fournisseur expose, et qu'un consommateur qui
-    lirait `facture["categories"]` comme un tableau ne verrait jamais.
+    An invoice doesn't carry them directly: it gets them from its ledger
+    entry. This is the chaining the provider exposes, and a consumer that
+    reads `invoice["categories"]` as an array would never see it.
     """
     if "categories" in parent and isinstance(parent["categories"], list):
         return list(parent["categories"])
     reference = parent.get("ledger_entry")
     if not reference:
         return []
-    ecriture = next((e for e in donnees["ledger_entries"] if e["id"] == reference["id"]), None)
-    return list(ecriture["categories"]) if ecriture else []
+    entry = next((e for e in data["ledger_entries"] if e["id"] == reference["id"]), None)
+    return list(entry["categories"]) if entry else []
 
 
-def _transactions_appariees(cle_index: str) -> Callable[..., list[dict[str, Any]]]:
-    def resoudre(donnees: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
-        identifiants = set(donnees[cle_index].get(parent["id"], []))
-        return [t for t in donnees["transactions"] if t["id"] in identifiants]
+def _matched_transactions(index_key: str) -> Callable[..., list[dict[str, Any]]]:
+    def resolve(data: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
+        ids = set(data[index_key].get(parent["id"], []))
+        return [t for t in data["transactions"] if t["id"] in ids]
 
-    return resoudre
+    return resolve
 
 
-def _factures_appariees(donnees: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
-    """Les factures — clientes ET fournisseurs — rapprochées d'une transaction."""
-    resultat: list[dict[str, Any]] = []
+def _matched_invoices(data: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
+    """Invoices — customer AND supplier — reconciled with a transaction."""
+    result: list[dict[str, Any]] = []
     for index, collection in (
         ("matched_transactions_par_facture_client", "customer_invoices"),
         ("matched_transactions_par_facture_fournisseur", "supplier_invoices"),
     ):
-        for facture_id, transactions in donnees[index].items():
+        for invoice_id, transactions in data[index].items():
             if parent["id"] in transactions:
-                facture = next((f for f in donnees[collection] if f["id"] == facture_id), None)
-                if facture is not None:
-                    resultat.append(facture)
-    return resultat
+                invoice = next((f for f in data[collection] if f["id"] == invoice_id), None)
+                if invoice is not None:
+                    result.append(invoice)
+    return result
 
 
-def _reglements(collection: str) -> Callable[..., list[dict[str, Any]]]:
-    """Les règlements enregistrés SUR la facture.
+def _payments(collection: str) -> Callable[..., list[dict[str, Any]]]:
+    """The payments recorded ON the invoice.
 
-    ⚠️ Ce ne sont PAS les transactions rapprochées — le fournisseur consacre
-    une page à la distinction. Une facture réglée porte un `payment` ; le
-    mouvement bancaire correspondant est une `matched_transaction`. Les
-    additionner compte l'encaissement deux fois.
+    WARNING: these are NOT the reconciled transactions — the provider
+    devotes a page to the distinction. A settled invoice carries a
+    `payment`; the corresponding bank movement is a `matched_transaction`.
+    Adding them up counts the cash-in twice.
     """
 
-    def resoudre(donnees: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
-        del donnees
+    def resolve(data: dict[str, Any], parent: dict[str, Any]) -> list[dict[str, Any]]:
+        del data
         if not parent.get("paid"):
             return []
         return [
@@ -393,265 +390,265 @@ def _reglements(collection: str) -> Callable[..., list[dict[str, Any]]]:
         ]
 
     del collection
-    return resoudre
+    return resolve
 
 
-SOUS_RESSOURCES: tuple[SousRessourceSpec, ...] = (
-    # ── Facture client ──────────────────────────────────────────────────────
-    SousRessourceSpec(
+SUB_RESOURCES: tuple[SubResourceSpec, ...] = (
+    # ── Customer invoice ────────────────────────────────────────────────────
+    SubResourceSpec(
         "customer_invoices",
         "customer_invoices",
         "invoice_lines",
-        LigneFacture,
+        InvoiceLine,
         "customer_invoices:readonly",
-        _sous("customer_invoice_lines"),
+        _sub_resolver("customer_invoice_lines"),
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "customer_invoices",
         "customer_invoices",
         "invoice_line_sections",
-        ElementGenerique,
+        GenericElement,
         "customer_invoices:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "customer_invoices",
         "customer_invoices",
         "payments",
-        Reglement,
+        Payment,
         "customer_invoices:readonly",
-        _reglements("customer_invoices"),
+        _payments("customer_invoices"),
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "customer_invoices",
         "customer_invoices",
         "matched_transactions",
         Transaction,
         "customer_invoices:readonly",
-        _transactions_appariees("matched_transactions_par_facture_client"),
+        _matched_transactions("matched_transactions_par_facture_client"),
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "customer_invoices",
         "customer_invoices",
         "appendices",
-        ElementGenerique,
+        GenericElement,
         "customer_invoices:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "customer_invoices",
         "customer_invoices",
         "categories",
-        Categorie,
+        Category,
         "customer_invoices:readonly",
-        _categories_de,
+        _categories_of,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "customer_invoices",
         "customer_invoices",
         "custom_header_fields",
-        ElementGenerique,
+        GenericElement,
         "customer_invoices:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "customer_invoices",
         "customer_invoices",
         "installments",
-        ElementGenerique,
+        GenericElement,
         "customer_invoices:readonly",
-        _vide,
-        tri_defaut="deadline",
+        _empty,
+        default_sort="deadline",
     ),
-    # ── Facture fournisseur ─────────────────────────────────────────────────
-    SousRessourceSpec(
+    # ── Supplier invoice ────────────────────────────────────────────────────
+    SubResourceSpec(
         "supplier_invoices",
         "supplier_invoices",
         "invoice_lines",
-        LigneFacture,
+        InvoiceLine,
         "supplier_invoices:readonly",
-        _sous("supplier_invoice_lines"),
+        _sub_resolver("supplier_invoice_lines"),
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "supplier_invoices",
         "supplier_invoices",
         "categories",
-        Categorie,
+        Category,
         "supplier_invoices:readonly",
-        _categories_de,
+        _categories_of,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "supplier_invoices",
         "supplier_invoices",
         "payments",
-        Reglement,
+        Payment,
         "supplier_invoices:readonly",
-        _reglements("supplier_invoices"),
+        _payments("supplier_invoices"),
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "supplier_invoices",
         "supplier_invoices",
         "matched_transactions",
         Transaction,
         "supplier_invoices:readonly",
-        _transactions_appariees("matched_transactions_par_facture_fournisseur"),
+        _matched_transactions("matched_transactions_par_facture_fournisseur"),
     ),
-    # ── Tiers ───────────────────────────────────────────────────────────────
-    SousRessourceSpec(
+    # ── Third parties ───────────────────────────────────────────────────────
+    SubResourceSpec(
         "customers",
         "customers",
         "contacts",
         Contact,
         "customers:readonly",
-        _sous("customer_contacts"),
+        _sub_resolver("customer_contacts"),
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "customers",
         "customers",
         "categories",
-        Categorie,
+        Category,
         "customers:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "suppliers",
         "suppliers",
         "categories",
-        Categorie,
+        Category,
         "suppliers:readonly",
-        _vide,
+        _empty,
     ),
-    # ── Comptabilité ────────────────────────────────────────────────────────
-    SousRessourceSpec(
+    # ── Accounting ──────────────────────────────────────────────────────────
+    SubResourceSpec(
         "ledger_entries",
         "ledger_entries",
         "ledger_entry_lines",
-        LigneEcriture,
+        LedgerEntryLine,
         "ledger_entries:readonly",
-        _lignes_ecriture,
+        _ledger_entry_lines_of,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "ledger_entries",
         "ledger_entries",
         "dms_files",
-        ElementGenerique,
+        GenericElement,
         "ledger_entries:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "ledger_entry_lines",
         "ledger_entry_lines",
         "categories",
-        Categorie,
+        Category,
         "ledger_entries:readonly",
-        _categories_de,
+        _categories_of,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "ledger_entry_lines",
         "ledger_entry_lines",
         "lettered_ledger_entry_lines",
-        LigneEcriture,
+        LedgerEntryLine,
         "ledger_entries:readonly",
-        _lignes_lettrees,
+        _lettered_lines,
     ),
-    # ── Analytique ──────────────────────────────────────────────────────────
-    SousRessourceSpec(
+    # ── Analytics ───────────────────────────────────────────────────────────
+    SubResourceSpec(
         "category_groups",
         "category_groups",
         "categories",
-        Categorie,
+        Category,
         "categories:readonly",
-        lambda donnees, parent: [
-            c for c in donnees["categories"] if c["category_group"]["id"] == parent["id"]
+        lambda data, parent: [
+            c for c in data["categories"] if c["category_group"]["id"] == parent["id"]
         ],
     ),
-    # ── Banque ──────────────────────────────────────────────────────────────
-    SousRessourceSpec(
+    # ── Banking ─────────────────────────────────────────────────────────────
+    SubResourceSpec(
         "transactions",
         "transactions",
         "categories",
-        Categorie,
+        Category,
         "transactions:readonly",
-        _categories_de,
+        _categories_of,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "transactions",
         "transactions",
         "matched_invoices",
-        FactureClient,
+        CustomerInvoice,
         "transactions:readonly",
-        _factures_appariees,
+        _matched_invoices,
     ),
-    # ── Périphérie ──────────────────────────────────────────────────────────
-    SousRessourceSpec(
+    # ── Periphery ───────────────────────────────────────────────────────────
+    SubResourceSpec(
         "quotes",
         "quotes",
         "invoice_lines",
-        LigneFacture,
+        InvoiceLine,
         "quotes:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "quotes",
         "quotes",
         "invoice_line_sections",
-        ElementGenerique,
+        GenericElement,
         "quotes:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "quotes",
         "quotes",
         "appendices",
-        ElementGenerique,
+        GenericElement,
         "quotes:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "commercial_documents",
         "commercial_documents",
         "invoice_lines",
-        LigneFacture,
+        InvoiceLine,
         "commercial_documents:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "commercial_documents",
         "commercial_documents",
         "invoice_line_sections",
-        ElementGenerique,
+        GenericElement,
         "commercial_documents:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "commercial_documents",
         "commercial_documents",
         "appendices",
-        ElementGenerique,
+        GenericElement,
         "commercial_documents:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "billing_subscriptions",
         "billing_subscriptions",
         "invoice_lines",
-        LigneFacture,
+        InvoiceLine,
         "billing_subscriptions:readonly",
-        _vide,
+        _empty,
     ),
-    SousRessourceSpec(
+    SubResourceSpec(
         "billing_subscriptions",
         "billing_subscriptions",
         "invoice_line_sections",
-        ElementGenerique,
+        GenericElement,
         "billing_subscriptions:readonly",
-        _vide,
+        _empty,
     ),
 )
 
-#: Les dix journaux de changements. Les sept premiers sont documentés dans le
-#: guide ; `quotes` et les deux `*_categories` n'apparaissent que dans la
-#: référence — un consommateur qui s'en tiendrait au guide les manquerait.
+#: The ten changelogs. The first seven are documented in the guide; `quotes`
+#: and the two `*_categories` ones only appear in the reference — a consumer
+#: that stuck to the guide would miss them.
 CHANGELOGS: tuple[tuple[str, str], ...] = (
     ("customer_invoices", "customer_invoices:readonly"),
     ("supplier_invoices", "supplier_invoices:readonly"),
@@ -667,182 +664,180 @@ CHANGELOGS: tuple[tuple[str, str], ...] = (
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Le pipeline de requête
+#  The request pipeline
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def _entetes_debit_courants(chemin: str) -> dict[str, str]:
-    """Les en-têtes `ratelimit-*`, sur TOUTE réponse.
+def _current_rate_limit_headers(path: str) -> dict[str, str]:
+    """The `ratelimit-*` headers, on EVERY response.
 
-    Le fournisseur les sert même sur un 200 : c'est ce qui permet à un client
-    de se réguler AVANT de se faire limiter. Un mock qui ne les servirait que
-    sur les 429 apprendrait au consommateur à ne pas les lire.
+    The provider serves them even on a 200: this is what lets a client
+    throttle itself BEFORE getting rate limited. A mock that only served
+    them on 429s would teach the consumer not to read them.
     """
-    vus = engine.request_counts.get(chemin, 0)
-    reste = max(0, settings.rate_limit - vus)
+    seen = engine.request_counts.get(path, 0)
+    remaining = max(0, settings.rate_limit - seen)
     reset = int(engine.now()) + int(settings.rate_window)
-    return entetes_debit(settings.rate_limit, reste, reset)
+    return rate_limit_headers(settings.rate_limit, remaining, reset)
 
 
-def maintenant_virtuel() -> datetime:
-    """L'instant de référence du mock — l'ancre du jeu de données, pas `now()`.
+def current_virtual_time() -> datetime:
+    """The mock's reference instant — the dataset's anchor, not `now()`.
 
-    Elle avance avec la chronologie d'évolution : chaque événement vaut
-    `EPOQUE + (k+1) x intervalle`, donc le « maintenant » d'un mock qui a joué
-    N événements est `EPOQUE + N x intervalle`. C'est ce qui rend la rétention
-    du changelog reproductible : le même mock, avancé du même nombre de pas,
-    retient exactement les mêmes événements — quel que soit le jour où on le
-    lance.
+    It advances with the evolution timeline: each event is worth
+    `EPOCH + (k+1) x interval`, so the "now" of a mock that has played N
+    events is `EPOCH + N x interval`. This is what makes changelog
+    retention reproducible: the same mock, advanced by the same number of
+    steps, retains exactly the same events — whatever day it's run on.
     """
     from .evolution import EPOQUE
 
-    return EPOQUE + timedelta(seconds=settings.evolution_interval * state.evolution.rang)
+    return EPOQUE + timedelta(seconds=settings.evolution_interval * state.evolution.rank)
 
 
-def _dispatch_injections(chemin: str, rang: int) -> Response | None:
-    """Le point de dispatch unique, évalué avant l'authentification."""
-    if (regle := engine.first("latency", chemin)) is not None and regle.consume():
-        time.sleep(regle.seconds)
+def _dispatch_injections(path: str, rank: int) -> Response | None:
+    """The single dispatch point, evaluated before authentication."""
+    if (rule := engine.first("latency", path)) is not None and rule.consume():
+        time.sleep(rule.seconds)
 
-    regle = engine.first("rate_limit", chemin)
-    if regle is not None and rang > regle.after_requests and regle.consume():
-        # `ratelimit-remaining: 0` sur un 429 — par définition : c'est
-        # justement parce qu'il ne reste rien qu'on est limité. Servir le
-        # compteur nominal ici ferait croire à un client qu'il peut repartir
-        # tout de suite, et il boucle.
-        entetes = entetes_debit(settings.rate_limit, 0, int(engine.now() + settings.rate_window))
-        return erreur_debit(regle.retry_after_seconds, entetes)
+    rule = engine.first("rate_limit", path)
+    if rule is not None and rank > rule.after_requests and rule.consume():
+        # `ratelimit-remaining: 0` on a 429 — by definition: it's precisely
+        # because nothing is left that we're rate limited. Serving the
+        # nominal counter here would make a client believe it can retry
+        # right away, and it loops.
+        headers = rate_limit_headers(
+            settings.rate_limit, 0, int(engine.now() + settings.rate_window)
+        )
+        return rate_limit_error(rule.retry_after_seconds, headers)
 
-    if (regle := engine.first("auth_reject", chemin)) is not None and regle.consume():
-        return erreur_jeton()
+    if (rule := engine.first("auth_reject", path)) is not None and rule.consume():
+        return token_error()
 
-    if (regle := engine.first("scope_reject", chemin)) is not None and regle.consume():
-        return erreur_scope(regle.scope_manquant)
+    if (rule := engine.first("scope_reject", path)) is not None and rule.consume():
+        return scope_error(rule.missing_scope)
 
-    if (regle := engine.first("cursor_reject", chemin)) is not None and regle.consume():
-        return erreur(400, "Invalid cursor")
+    if (rule := engine.first("cursor_reject", path)) is not None and rule.consume():
+        return error(400, "Invalid cursor")
 
-    if (regle := engine.first("status", chemin)) is not None and regle.consume():
-        return erreur(regle.status, f"Injected failure ({regle.status})")
+    if (rule := engine.first("status", path)) is not None and rule.consume():
+        return error(rule.status, f"Injected failure ({rule.status})")
     return None
 
 
-def _prelude(request: Request, chemin: str, scope: str | None) -> Response | None:
-    """Le pipeline commun. Rend `None` quand la requête peut passer."""
-    parametres = dict(request.query_params)
-    state.avancer_evolution(engine.now())
-    rang = engine.observe(chemin, parametres)
+def _prelude(request: Request, path: str, scope: str | None) -> Response | None:
+    """The shared pipeline. Returns `None` when the request may proceed."""
+    params = dict(request.query_params)
+    state.advance_evolution(engine.now())
+    rank = engine.observe(path, params)
 
-    if (refus := _dispatch_injections(chemin, rang)) is not None:
-        return refus
+    if (rejection := _dispatch_injections(path, rank)) is not None:
+        return rejection
 
-    jeton = jeton_de_l_entete(request.headers.get("Authorization"))
-    if not jeton_est_valide(jeton):
-        return erreur_jeton()
-    if not scope_accorde(scope):
-        return erreur_scope(scope or "")
+    token = token_from_header(request.headers.get("Authorization"))
+    if not token_is_valid(token):
+        return token_error()
+    if not scope_granted(scope):
+        return scope_error(scope or "")
     return None
 
 
-def _ok(contenu: Any, chemin: str) -> JSONResponse:
-    return JSONResponse(content=contenu, headers=_entetes_debit_courants(chemin))
+def _ok(content: Any, path: str) -> JSONResponse:
+    return JSONResponse(content=content, headers=_current_rate_limit_headers(path))
 
 
 def _page(
     elements: list[dict[str, Any]],
     request: Request,
     *,
-    tri_defaut: str,
-    filtrable: bool,
+    default_sort: str,
+    filterable: bool,
     maximum: int | None = None,
     pagination_offset: bool = False,
 ) -> dict[str, Any] | Response:
-    """Filtre, trie, pagine — dans cet ordre, qui est le seul correct.
+    """Filters, sorts, paginates — in that order, which is the only correct one.
 
-    Trier avant de filtrer donnerait le même résultat mais coûterait plus ;
-    paginer avant de filtrer donnerait un résultat FAUX (des pages courtes,
-    puis vides, sans que `has_more` le dise). L'ordre est donc porteur.
+    Sorting before filtering would give the same result but cost more;
+    paginating before filtering would give a WRONG result (short pages, then
+    empty ones, without `has_more` saying so). The order therefore matters.
     """
     try:
-        if filtrable:
-            elements = appliquer_filtre(
-                elements, analyser_filtre(request.query_params.get("filter"))
-            )
-        elements = appliquer_tri(elements, request.query_params.get("sort"), defaut=tri_defaut)
-        limite = limite_demandee(request.query_params.get("limit"), maximum=maximum)
-        return paginer(
+        if filterable:
+            elements = apply_filter(elements, parse_filter(request.query_params.get("filter")))
+        elements = apply_sort(elements, request.query_params.get("sort"), default=default_sort)
+        limit = requested_limit(request.query_params.get("limit"), maximum=maximum)
+        return paginate(
             elements,
-            curseur=request.query_params.get("cursor"),
-            limite=limite,
-            cle=tri_defaut.lstrip("-") if tri_defaut.lstrip("-") in {"id"} else "id",
+            cursor=request.query_params.get("cursor"),
+            limit=limit,
+            key=default_sort.lstrip("-") if default_sort.lstrip("-") in {"id"} else "id",
             offset=pagination_offset,
         )
-    except (FiltreInvalide, TriInvalide, LimiteInvalide, CurseurInvalide) as exc:
-        return erreur(400, str(exc))
+    except (InvalidFilter, InvalidSort, InvalidLimit, InvalidCursor) as exc:
+        return error(400, str(exc))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Les paramètres de requête, déclarés POUR LE CONTRAT
+#  Query parameters, declared FOR THE CONTRACT
 # ═════════════════════════════════════════════════════════════════════════════
 #
-# ┌─ POURQUOI ILS NE SONT PAS DANS LA SIGNATURE DES HANDLERS ──────────────────┐
-# │ Déclarer `limit: int` en argument ferait valider FastAPI À NOTRE PLACE, et │
-# │ un `limit=abc` rendrait le 422 de FastAPI — une forme d'erreur qui         │
-# │ n'existe pas chez Pennylane, où c'est un 400 à l'enveloppe                 │
-# │ `{"error","status"}`. Le mock apprendrait au consommateur une gestion      │
-# │ d'erreur fausse.                                                          │
+# ┌─ WHY THEY AREN'T IN THE HANDLERS' SIGNATURE ────────────────────────────────┐
+# │ Declaring `limit: int` as an argument would make FastAPI validate IN OUR   │
+# │ PLACE, and a `limit=abc` would render FastAPI's 422 — an error shape that  │
+# │ doesn't exist at Pennylane, where it's a 400 in the `{"error","status"}`   │
+# │ envelope. The mock would teach the consumer a false error-handling model.  │
 # │                                                                            │
-# │ Les paramètres sont donc LUS de `request.query_params` et validés par      │
-# │ `pagination.py` / `filtres.py`, et déclarés ici uniquement pour que le     │
-# │ contrat publié les décrive. C'est le contrat que copie insights360 : s'il  │
-# │ ne portait pas `cursor`, un consommateur ne saurait pas qu'il doit         │
-# │ paginer.                                                                   │
+# │ The parameters are therefore READ from `request.query_params` and         │
+# │ validated by `pagination.py` / `filters.py`, and declared here only so    │
+# │ the published contract describes them. This is the contract insights360   │
+# │ copies: if it didn't carry `cursor`, a consumer wouldn't know it has to    │
+# │ paginate.                                                                  │
 # └────────────────────────────────────────────────────────────────────────────┘
 
 
-def _param_curseur() -> dict[str, Any]:
+def _cursor_param() -> dict[str, Any]:
     return {
         "name": "cursor",
         "in": "query",
         "required": False,
         "schema": {"type": "string"},
         "description": (
-            "Curseur de pagination, OPAQUE. Reprendre tel quel le `next_cursor` "
-            "de la réponse précédente ; le décoder, c'est s'adosser à un détail "
-            "d'implémentation que la documentation du fournisseur montre sous "
-            "trois formes incompatibles. Un curseur illisible rend 400."
+            "Pagination cursor, OPAQUE. Reuse the previous response's "
+            "`next_cursor` as-is; decoding it means leaning on an "
+            "implementation detail the provider's documentation shows under "
+            "three incompatible forms. An unreadable cursor renders 400."
         ),
     }
 
 
-def _param_limite(maximum: int) -> dict[str, Any]:
+def _limit_param(maximum: int) -> dict[str, Any]:
     return {
         "name": "limit",
         "in": "query",
         "required": False,
         "schema": {"type": "integer", "minimum": 1, "maximum": maximum},
         "description": (
-            f"Taille de page. Défaut 20, entre 1 et {maximum}. Une valeur hors "
-            "bornes rend 400 — elle n'est PAS rabotée en silence."
+            f"Page size. Default 20, between 1 and {maximum}. An out-of-bounds "
+            "value renders 400 — it is NOT silently clamped."
         ),
     }
 
 
-def _param_tri(defaut: str) -> dict[str, Any]:
+def _sort_param(default: str) -> dict[str, Any]:
     return {
         "name": "sort",
         "in": "query",
         "required": False,
-        "schema": {"type": "string", "default": defaut},
+        "schema": {"type": "string", "default": default},
         "description": (
-            f"Champ de tri, préfixé de `-` pour l'ordre décroissant. Défaut `{defaut}` "
-            "— donc DÉCROISSANT si rien n'est précisé, ce qui est l'inverse de "
-            "l'intuition."
+            f"Sort field, prefixed with `-` for descending order. Default `{default}` "
+            "— i.e. DESCENDING if nothing is specified, which is the opposite of "
+            "intuition."
         ),
     }
 
 
-def _param_filtre() -> dict[str, Any]:
+def _filter_param() -> dict[str, Any]:
     return {
         "name": "filter",
         "in": "query",
@@ -850,91 +845,91 @@ def _param_filtre() -> dict[str, Any]:
         "schema": {"type": "string"},
         "example": '[{"field": "date", "operator": "gteq", "value": "2026-01-01"}]',
         "description": (
-            "Tableau JSON d'objets `{field, operator, value}`, cumulés en ET. "
-            "Opérateurs : eq, not_eq, lt, lteq, gt, gteq, in, not_in, start_with. "
-            "⚠️ Le curseur N'ENCODE PAS les filtres : il faut les REJOUER sur "
-            "chaque page, sinon les pages 2+ rendent des résultats non filtrés."
+            "JSON array of `{field, operator, value}` objects, combined with AND. "
+            "Operators: eq, not_eq, lt, lteq, gt, gteq, in, not_in, start_with. "
+            "WARNING: the cursor does NOT ENCODE filters: they must be REPLAYED on "
+            "every page, otherwise pages 2+ return unfiltered results."
         ),
     }
 
 
-def _params_liste(*, tri_defaut: str, filtrable: bool, maximum: int) -> list[dict[str, Any]]:
-    """Les paramètres de requête d'une liste.
+def _list_params(*, default_sort: str, filterable: bool, maximum: int) -> list[dict[str, Any]]:
+    """A list endpoint's query parameters.
 
-    ⚠️ Le paramètre de CHEMIN n'y figure pas : FastAPI AJOUTE les entrées
-    d'`openapi_extra` à celles qu'il déduit de la signature, il ne les remplace
-    pas. L'y mettre le publierait deux fois, et un générateur de client
-    produirait une fonction à deux arguments identiques.
+    WARNING: the PATH parameter isn't in here: FastAPI ADDS the
+    `openapi_extra` entries to those it infers from the signature, it
+    doesn't replace them. Putting it here would publish it twice, and a
+    client generator would produce a function with two identical arguments.
     """
-    parametres = [_param_curseur(), _param_limite(maximum), _param_tri(tri_defaut)]
-    if filtrable:
-        parametres.append(_param_filtre())
-    return parametres
+    params = [_cursor_param(), _limit_param(maximum), _sort_param(default_sort)]
+    if filterable:
+        params.append(_filter_param())
+    return params
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  L'application
+#  The application
 # ═════════════════════════════════════════════════════════════════════════════
 
 app = FastAPI(
     title="Pennylane Company API v2 — mock",
     version=VERSION,
     description=(
-        "Mock de l'API Pennylane v2 (lecture seule) sur le monde « Boréal Conseil ». "
-        "Enveloppe à curseur `{items, has_more, next_cursor}`, montants en CHAÎNES, "
-        "scopes granulaires, changelogs pour l'extraction incrémentale."
+        "Read-only mock of the Pennylane v2 API on the « Boréal Conseil » world. "
+        "Cursor envelope `{items, has_more, next_cursor}`, amounts as STRINGS, "
+        "granular scopes, changelogs for incremental extraction."
     ),
     docs_url="/docs",
     redoc_url=None,
 )
-routeur = APIRouter()
+router = APIRouter()
 
 
 @app.get("/health", include_in_schema=False)
 def health() -> dict[str, str]:
-    """Sonde de vivacité — NON authentifiée, hors de la surface fournisseur.
+    """Liveness probe — NOT authenticated, outside the provider surface.
 
-    Le healthcheck de l'image l'interroge, et `depends_on: service_healthy`
-    côté consommateur en dépend. La mettre derrière le jeton rendrait le
-    conteneur « unhealthy » pour un problème de configuration.
+    The image's healthcheck polls it, and the consumer's `depends_on:
+    service_healthy` relies on it. Putting it behind the token would make the
+    container "unhealthy" for a configuration problem.
     """
     return {"status": "ok", "service": "pennylane-mock"}
 
 
 @app.exception_handler(StarletteHTTPException)
-async def _erreur_http(request: Request, exc: StarletteHTTPException) -> Response:
-    """Routes et méthodes inconnues : l'enveloppe Pennylane, pas le 404 FastAPI.
+async def _http_error(request: Request, exc: StarletteHTTPException) -> Response:
+    """Unknown routes and methods: the Pennylane envelope, not FastAPI's 404.
 
-    Un `{"detail": "Not Found"}` apprendrait au consommateur une forme d'erreur
-    qui n'existe pas chez le fournisseur — et son code de gestion d'erreur
-    casserait le jour où il parle à la vraie API.
+    A `{"detail": "Not Found"}` would teach the consumer an error shape that
+    doesn't exist at the provider — and its error-handling code would break
+    the day it talks to the real API.
     """
     del request
     if exc.status_code in (404, 405):
-        return erreur_introuvable()
-    return erreur(exc.status_code, str(exc.detail))
+        return not_found_error()
+    return error(exc.status_code, str(exc.detail))
 
 
-# ── /me : le seul endpoint sans scope ────────────────────────────────────────
+# ── /me: the only endpoint without a scope ────────────────────────────────────
 
 
-@routeur.get(
-    f"{PREFIXE}/me",
-    response_model=ProfilUtilisateur,
-    responses=REPONSES_ERREUR,
+@router.get(
+    f"{PREFIX}/me",
+    response_model=UserProfile,
+    responses=ERROR_RESPONSES,
     tags=["Users"],
-    summary="Profil de l'utilisateur et de la société",
+    summary="User and company profile",
 )
-def profil(request: Request) -> Any:
-    """Le test de fumée d'un connecteur : qui suis-je, et que puis-je lire ?
+def me(request: Request) -> Any:
+    """A connector's smoke test: who am I, and what can I read?
 
-    Aucun scope requis — c'est justement lui qui sert à découvrir les scopes
-    dont on dispose. Un connecteur doit l'appeler AVANT d'ouvrir son pipeline :
-    échouer sur une authentification vaut mieux qu'un run à moitié fait.
+    No scope required — this is precisely the endpoint used to discover
+    which scopes are available. A connector must call it BEFORE opening its
+    pipeline: failing on authentication beats a half-done run.
     """
-    chemin = f"{PREFIXE}/me"
-    if (refus := _prelude(request, chemin, None)) is not None:
-        return refus
+    path = f"{PREFIX}/me"
+    if (rejection := _prelude(request, path, None)) is not None:
+        return rejection
     return _ok(
         {
             "user": {
@@ -952,19 +947,19 @@ def profil(request: Request) -> Any:
             },
             "scopes": sorted(settings.scopes),
         },
-        chemin,
+        path,
     )
 
 
-# ── La balance ───────────────────────────────────────────────────────────────
+# ── The trial balance ──────────────────────────────────────────────────────────
 
 
-@routeur.get(
-    f"{PREFIXE}/trial_balance",
-    response_model=Page[LigneBalance],
-    responses=REPONSES_ERREUR,
+@router.get(
+    f"{PREFIX}/trial_balance",
+    response_model=Page[TrialBalanceLine],
+    responses=ERROR_RESPONSES,
     tags=["Accounting"],
-    summary="Balance générale sur une période",
+    summary="General trial balance over a period",
     openapi_extra={
         "parameters": [
             {
@@ -972,14 +967,14 @@ def profil(request: Request) -> Any:
                 "in": "query",
                 "required": True,
                 "schema": {"type": "string", "format": "date"},
-                "description": "Début de la période. OBLIGATOIRE.",
+                "description": "Start of the period. REQUIRED.",
             },
             {
                 "name": "period_end",
                 "in": "query",
                 "required": True,
                 "schema": {"type": "string", "format": "date"},
-                "description": "Fin de la période. OBLIGATOIRE.",
+                "description": "End of the period. REQUIRED.",
             },
             {
                 "name": "is_auxiliary",
@@ -987,180 +982,180 @@ def profil(request: Request) -> Any:
                 "required": False,
                 "schema": {"type": "boolean"},
                 "description": (
-                    "Détailler les comptes auxiliaires. À faux, ils sont AGRÉGÉS "
-                    "dans leur racine : sommer les deux vues double l'actif."
+                    "Detail auxiliary accounts. When false, they are AGGREGATED "
+                    "into their root: summing both views doubles the assets."
                 ),
             },
-            _param_curseur(),
-            _param_limite(1000),
+            _cursor_param(),
+            _limit_param(1000),
         ]
     },
 )
 def trial_balance(request: Request) -> Any:
-    """`period_start` et `period_end` sont OBLIGATOIRES.
+    """`period_start` and `period_end` are REQUIRED.
 
-    C'est la seule ressource du mock qui exige des paramètres — et c'est
-    délibéré chez le fournisseur : une balance sans période n'a pas de sens.
-    Un consommateur qui les oublie doit recevoir 400, pas une balance de
-    l'exercice courant choisie à sa place.
+    This is the mock's only resource that requires parameters — and it's
+    deliberate at the provider: a trial balance without a period makes no
+    sense. A consumer that omits them must get 400, not a balance for the
+    current fiscal year chosen on its behalf.
     """
-    chemin = f"{PREFIXE}/trial_balance"
-    if (refus := _prelude(request, chemin, "trial_balance:readonly")) is not None:
-        return refus
+    path = f"{PREFIX}/trial_balance"
+    if (rejection := _prelude(request, path, "trial_balance:readonly")) is not None:
+        return rejection
 
     from .dataset.realiste import balance
 
-    debut_brut = request.query_params.get("period_start")
-    fin_brut = request.query_params.get("period_end")
-    if not debut_brut or not fin_brut:
-        return erreur(400, "period_start and period_end are required")
+    raw_start = request.query_params.get("period_start")
+    raw_end = request.query_params.get("period_end")
+    if not raw_start or not raw_end:
+        return error(400, "period_start and period_end are required")
     try:
-        debut, fin = date.fromisoformat(debut_brut), date.fromisoformat(fin_brut)
+        start, end = date.fromisoformat(raw_start), date.fromisoformat(raw_end)
     except ValueError:
-        return erreur(400, "period_start and period_end must be ISO 8601 dates")
+        return error(400, "period_start and period_end must be ISO 8601 dates")
 
-    auxiliaires = (request.query_params.get("is_auxiliary") or "").lower() in {
+    auxiliary = (request.query_params.get("is_auxiliary") or "").lower() in {
         "1",
         "true",
         "yes",
     }
-    lignes = balance(
+    lines = balance(
         state.dataset["ledger_entry_lines"],
         state.dataset["ledger_accounts"],
-        debut=debut,
-        fin=fin,
-        auxiliaires=auxiliaires,
+        debut=start,
+        fin=end,
+        auxiliaires=auxiliary,
     )
-    resultat = _page(
-        lignes,
+    result = _page(
+        lines,
         request,
-        tri_defaut="number",
-        filtrable=False,
-        maximum=settings.limite_max_changelog,
+        default_sort="number",
+        filterable=False,
+        maximum=settings.max_limit_changelog,
     )
-    if isinstance(resultat, Response):
-        return resultat
-    return _ok(resultat, chemin)
+    if isinstance(result, Response):
+        return result
+    return _ok(result, path)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  La fabrique de routes
+#  The route factory
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def _monter_ressource(spec: RessourceSpec) -> None:
-    """Monte la liste et le détail d'une ressource.
+def _mount_resource(spec: ResourceSpec) -> None:
+    """Mounts a resource's list and detail routes.
 
-    La fabrique existe pour lier `spec` à chaque itération : sans elle, la
-    fermeture capturerait la variable de boucle et les 24 ressources
-    serviraient toutes la dernière.
+    The factory exists to bind `spec` at each iteration: without it, the
+    closure would capture the loop variable and all 24 resources would end
+    up serving the last one.
     """
-    base = f"{PREFIXE}/{spec.chemin}"
+    base = f"{PREFIX}/{spec.path}"
 
-    if spec.avec_liste:
+    if spec.with_list:
 
-        @routeur.get(
+        @router.get(
             base,
-            response_model=Page[spec.modele],  # type: ignore[name-defined]
-            responses=REPONSES_ERREUR,
-            tags=[spec.singulier],
-            summary=f"Liste des {spec.chemin}",
-            name=f"list_{spec.cle}",
+            response_model=Page[spec.model],  # type: ignore[name-defined]
+            responses=ERROR_RESPONSES,
+            tags=[spec.singular],
+            summary=f"List {spec.path}",
+            name=f"list_{spec.key}",
             openapi_extra={
-                "parameters": _params_liste(
-                    tri_defaut=spec.tri_defaut,
-                    filtrable=spec.filtrable,
-                    maximum=settings.limite_max,
+                "parameters": _list_params(
+                    default_sort=spec.default_sort,
+                    filterable=spec.filterable,
+                    maximum=settings.max_limit,
                 )
             },
         )
-        def lister(request: Request) -> Any:
-            if (refus := _prelude(request, base, spec.scope)) is not None:
-                return refus
-            resultat = _page(
-                list(state.dataset[spec.cle]),
+        def list_resource(request: Request) -> Any:
+            if (rejection := _prelude(request, base, spec.scope)) is not None:
+                return rejection
+            result = _page(
+                list(state.dataset[spec.key]),
                 request,
-                tri_defaut=spec.tri_defaut,
-                filtrable=spec.filtrable,
+                default_sort=spec.default_sort,
+                filterable=spec.filterable,
                 pagination_offset=spec.pagination_offset,
             )
-            if isinstance(resultat, Response):
-                return resultat
-            return _ok(resultat, base)
+            if isinstance(result, Response):
+                return result
+            return _ok(result, base)
 
-    if spec.avec_detail:
+    if spec.with_detail:
 
-        @routeur.get(
+        @router.get(
             base + "/{ident}",
-            response_model=spec.modele,
-            responses=REPONSES_ERREUR,
-            tags=[spec.singulier],
-            summary=f"Détail d'un élément de {spec.chemin}",
-            name=f"get_{spec.cle}",
+            response_model=spec.model,
+            responses=ERROR_RESPONSES,
+            tags=[spec.singular],
+            summary=f"Detail of a {spec.path} element",
+            name=f"get_{spec.key}",
         )
         def detail(ident: int, request: Request) -> Any:
-            chemin = f"{PREFIXE}/{spec.chemin}/{ident}"
-            if (refus := _prelude(request, chemin, spec.scope)) is not None:
-                return refus
-            element = state.index().get((spec.cle, ident))
+            path = f"{PREFIX}/{spec.path}/{ident}"
+            if (rejection := _prelude(request, path, spec.scope)) is not None:
+                return rejection
+            element = state.index().get((spec.key, ident))
             if element is None:
-                return erreur_introuvable()
-            return _ok(element, chemin)
+                return not_found_error()
+            return _ok(element, path)
 
 
-def _monter_sous_ressource(spec: SousRessourceSpec) -> None:
-    chemin_modele = f"{PREFIXE}/{spec.parent}/{{ident}}/{spec.chemin}"
+def _mount_sub_resource(spec: SubResourceSpec) -> None:
+    model_path = f"{PREFIX}/{spec.parent}/{{ident}}/{spec.path}"
 
-    @routeur.get(
-        chemin_modele,
-        response_model=Page[spec.modele],  # type: ignore[name-defined]
-        responses=REPONSES_ERREUR,
+    @router.get(
+        model_path,
+        response_model=Page[spec.model],  # type: ignore[name-defined]
+        responses=ERROR_RESPONSES,
         tags=[spec.parent],
-        summary=f"{spec.chemin} d'un élément de {spec.parent}",
-        name=f"list_{spec.parent}_{spec.chemin}",
+        summary=f"{spec.path} of a {spec.parent} element",
+        name=f"list_{spec.parent}_{spec.path}",
         openapi_extra={
-            "parameters": _params_liste(
-                tri_defaut=spec.tri_defaut,
-                filtrable=spec.chemin == "ledger_entry_lines",
-                maximum=settings.limite_max,
+            "parameters": _list_params(
+                default_sort=spec.default_sort,
+                filterable=spec.path == "ledger_entry_lines",
+                maximum=settings.max_limit,
             )
         },
     )
-    def lister(ident: int, request: Request) -> Any:
-        chemin = f"{PREFIXE}/{spec.parent}/{ident}/{spec.chemin}"
-        if (refus := _prelude(request, chemin, spec.scope)) is not None:
-            return refus
-        parent = state.index().get((spec.parent_cle, ident))
+    def list_sub_resource(ident: int, request: Request) -> Any:
+        path = f"{PREFIX}/{spec.parent}/{ident}/{spec.path}"
+        if (rejection := _prelude(request, path, spec.scope)) is not None:
+            return rejection
+        parent = state.index().get((spec.parent_key, ident))
         if parent is None:
-            return erreur_introuvable()
-        resultat = _page(
-            spec.resoudre(state.dataset, parent),
+            return not_found_error()
+        result = _page(
+            spec.resolve(state.dataset, parent),
             request,
-            tri_defaut=spec.tri_defaut,
-            # Une sous-collection n'accepte `filter` que sur
-            # `/ledger_entries/{id}/ledger_entry_lines` chez le fournisseur.
-            # Ailleurs il est ignoré — pas refusé.
-            filtrable=spec.chemin == "ledger_entry_lines",
+            default_sort=spec.default_sort,
+            # A sub-collection only accepts `filter` on
+            # `/ledger_entries/{id}/ledger_entry_lines` at the provider.
+            # Elsewhere it's ignored — not refused.
+            filterable=spec.path == "ledger_entry_lines",
         )
-        if isinstance(resultat, Response):
-            return resultat
-        return _ok(resultat, chemin)
+        if isinstance(result, Response):
+            return result
+        return _ok(result, path)
 
 
-def _monter_changelog(famille: str, scope: str) -> None:
-    chemin = f"{PREFIXE}/changelogs/{famille}"
+def _mount_changelog(family: str, scope: str) -> None:
+    path = f"{PREFIX}/changelogs/{family}"
 
-    @routeur.get(
-        chemin,
-        response_model=Page[EvenementChangelog],
-        responses=REPONSES_ERREUR,
+    @router.get(
+        path,
+        response_model=Page[ChangelogEvent],
+        responses=ERROR_RESPONSES,
         tags=["Changelogs"],
-        summary=f"Changements sur {famille}",
-        name=f"changelog_{famille}",
+        summary=f"Changes on {family}",
+        name=f"changelog_{family}",
         openapi_extra={
             "parameters": [
-                _param_curseur(),
-                _param_limite(settings.limite_max_changelog),
+                _cursor_param(),
+                _limit_param(settings.max_limit_changelog),
                 {
                     "name": "start_date",
                     "in": "query",
@@ -1168,151 +1163,152 @@ def _monter_changelog(famille: str, scope: str) -> None:
                     "schema": {"type": "string", "format": "date-time"},
                     "example": "2026-07-15T09:00:00Z",
                     "description": (
-                        "Borne basse RFC 3339. Sans elle, les changements les plus "
-                        "anciens sont rendus. Rétention de quatre semaines : une "
-                        "borne plus ancienne rend **422**. `start_date` et `cursor` "
-                        "ensemble rendent **400** — la pagination continue une "
-                        "fenêtre, elle n'en ouvre pas une nouvelle."
+                        "RFC 3339 lower bound. Without it, the oldest changes are "
+                        "returned. Four-week retention: an older bound renders "
+                        "**422**. `start_date` and `cursor` together render "
+                        "**400** — pagination continues a window, it doesn't "
+                        "open a new one."
                     ),
                 },
             ]
         },
     )
-    def journal(request: Request) -> Any:
-        if (refus := _prelude(request, chemin, scope)) is not None:
-            return refus
+    def changelog_route(request: Request) -> Any:
+        if (rejection := _prelude(request, path, scope)) is not None:
+            return rejection
 
-        brut_depuis = request.query_params.get("start_date")
-        curseur = request.query_params.get("cursor")
-        # `start_date` ET `cursor` ensemble → 400. La pagination CONTINUE une
-        # fenêtre, elle n'en ouvre pas une nouvelle : sans ce refus, un
-        # consommateur qui renvoie sa start_date à chaque page rejoue la
-        # première indéfiniment et croit avoir tout lu.
-        if brut_depuis and curseur:
-            return erreur(400, "start_date and cursor cannot be used together")
-        # L'instant de référence est celui du MOCK, pas l'horloge murale. Le
-        # jeu de données est ancré au 15 juillet 2026 : évaluer une rétention
-        # de quatre semaines contre la date réelle rendrait 422 sur toute
-        # `start_date` légitime dès le lendemain de la construction du jeu, et
-        # le mock cesserait de fonctionner sans qu'une ligne de code ait bougé.
-        maintenant = maintenant_virtuel()
+        raw_since = request.query_params.get("start_date")
+        cursor = request.query_params.get("cursor")
+        # `start_date` AND `cursor` together → 400. Pagination CONTINUES a
+        # window, it doesn't open a new one: without this refusal, a
+        # consumer that resends its start_date on every page replays the
+        # first one forever and believes it read everything.
+        if raw_since and cursor:
+            return error(400, "start_date and cursor cannot be used together")
+        # The reference instant is the MOCK's, not the wall clock's. The
+        # dataset is anchored on July 15, 2026: evaluating a four-week
+        # retention against the real date would render 422 on any
+        # legitimate `start_date` from the day after the dataset was built,
+        # and the mock would stop working without a line of code having
+        # moved.
+        now = current_virtual_time()
         try:
-            depuis = chg.analyser_start_date(brut_depuis)
-            chg.verifier_fenetre(depuis, maintenant)
-        except chg.DateInvalide as exc:
-            return erreur(400, str(exc))
-        except chg.FenetreTropAncienne as exc:
-            return erreur(422, str(exc))
+            since = chg.parse_start_date(raw_since)
+            chg.check_window(since, now)
+        except chg.InvalidDate as exc:
+            return error(400, str(exc))
+        except chg.WindowTooOld as exc:
+            return error(422, str(exc))
 
-        evenements = chg.selectionner(
-            state.dataset["changelogs"].get(famille, []), depuis, maintenant
-        )
+        events = chg.select(state.dataset["changelogs"].get(family, []), since, now)
         try:
-            limite = limite_demandee(
-                request.query_params.get("limit"), maximum=settings.limite_max_changelog
+            limit = requested_limit(
+                request.query_params.get("limit"), maximum=settings.max_limit_changelog
             )
-            # Ordre CHRONOLOGIQUE CROISSANT, jamais `-id` : c'est la seule
-            # famille de listes du dialecte qui ne suit pas le défaut.
-            resultat = paginer(evenements, curseur=curseur, limite=limite, cle="id")
-        except (LimiteInvalide, CurseurInvalide) as exc:
-            return erreur(400, str(exc))
-        return _ok(resultat, chemin)
+            # STRICTLY ASCENDING chronological order, never `-id`: this is
+            # the only list family in the dialect that doesn't follow the
+            # default.
+            result = paginate(events, cursor=cursor, limit=limit, key="id")
+        except (InvalidLimit, InvalidCursor) as exc:
+            return error(400, str(exc))
+        return _ok(result, path)
 
 
-def _monter_detail_client(segment: str, type_attendu: str) -> None:
-    """`/company_customers/{id}` et `/individual_customers/{id}`.
+def _mount_customer_detail(segment: str, expected_type: str) -> None:
+    """`/company_customers/{id}` and `/individual_customers/{id}`.
 
-    Ils servent la MÊME entité que `/customers/{id}`, mais rendent 404 quand le
-    type ne correspond pas. C'est ce qui permet à un consommateur de valider le
-    type sans lire le discriminant — et le 404 est la seule façon dont le
-    fournisseur le lui dit.
+    They serve the SAME entity as `/customers/{id}`, but render 404 when the
+    type doesn't match. This lets a consumer validate the type without
+    reading the discriminant — and the 404 is the only way the provider
+    tells it so.
     """
 
-    @routeur.get(
-        f"{PREFIXE}/{segment}/{{ident}}",
-        response_model=TiersClient,
-        responses=REPONSES_ERREUR,
+    @router.get(
+        f"{PREFIX}/{segment}/{{ident}}",
+        response_model=Customer,
+        responses=ERROR_RESPONSES,
         tags=["customer"],
-        summary=f"Détail d'un client de type {type_attendu}",
+        summary=f"Detail of a {expected_type} customer",
         name=f"get_{segment}",
     )
-    def detail_client(ident: int, request: Request) -> Any:
-        chemin = f"{PREFIXE}/{segment}/{ident}"
-        if (refus := _prelude(request, chemin, "customers:readonly")) is not None:
-            return refus
+    def customer_detail(ident: int, request: Request) -> Any:
+        path = f"{PREFIX}/{segment}/{ident}"
+        if (rejection := _prelude(request, path, "customers:readonly")) is not None:
+            return rejection
         element = state.index().get(("customers", ident))
-        if element is None or element["customer_type"] != type_attendu:
-            return erreur_introuvable()
-        return _ok(element, chemin)
+        if element is None or element["customer_type"] != expected_type:
+            return not_found_error()
+        return _ok(element, path)
 
 
-def _monter_export(segment: str, cle: str, scope: str) -> None:
-    """La RÉCUPÉRATION d'un export. Sa création est un POST, hors périmètre :
-    le mock sert donc des exports pré-existants, ce qui suffit à exercer le
-    second temps du couple création → récupération."""
+def _mount_export(segment: str, key: str, scope: str) -> None:
+    """RETRIEVAL of an export. Its creation is a POST, out of scope: the
+    mock therefore serves pre-existing exports, which is enough to exercise
+    the second half of the create → retrieve pair."""
 
-    @routeur.get(
-        f"{PREFIXE}/exports/{segment}/{{ident}}",
-        response_model=ElementGenerique,
-        responses=REPONSES_ERREUR,
+    @router.get(
+        f"{PREFIX}/exports/{segment}/{{ident}}",
+        response_model=GenericElement,
+        responses=ERROR_RESPONSES,
         tags=["Exports"],
-        summary=f"Récupération d'un export {segment}",
+        summary=f"Retrieve a {segment} export",
         name=f"get_export_{segment}",
     )
-    def detail_export(ident: int, request: Request) -> Any:
-        chemin = f"{PREFIXE}/exports/{segment}/{ident}"
-        if (refus := _prelude(request, chemin, scope)) is not None:
-            return refus
-        element = state.index().get((cle, ident))
+    def export_detail(ident: int, request: Request) -> Any:
+        path = f"{PREFIX}/exports/{segment}/{ident}"
+        if (rejection := _prelude(request, path, scope)) is not None:
+            return rejection
+        element = state.index().get((key, ident))
         if element is None:
-            return erreur_introuvable()
-        return _ok(element, chemin)
+            return not_found_error()
+        return _ok(element, path)
 
 
-@routeur.get(
-    f"{PREFIXE}/pa_registrations",
-    response_model=Page[ElementGenerique],
-    responses=REPONSES_ERREUR,
+@router.get(
+    f"{PREFIX}/pa_registrations",
+    response_model=Page[GenericElement],
+    responses=ERROR_RESPONSES,
     tags=["PA registrations"],
-    summary="Inscriptions aux plateformes agréées de facturation électronique",
+    summary="Registrations with authorized e-invoicing platforms",
 )
 def pa_registrations(request: Request) -> Any:
-    """L'OpenAPI ne déclare AUCUN scope ni AUCUN paramètre sur cet endpoint —
-    c'est le seul de la surface dans ce cas avec `/me`. Il n'est donc PAS
-    paginé : la réponse porte l'enveloppe, mais `has_more` y est toujours faux.
+    """The OpenAPI declares NO scope and NO parameter on this endpoint — the
+    only one on the surface in this case besides `/me`. It is therefore NOT
+    paginated: the response carries the envelope, but `has_more` is always
+    false there.
     """
-    chemin = f"{PREFIXE}/pa_registrations"
-    if (refus := _prelude(request, chemin, None)) is not None:
-        return refus
+    path = f"{PREFIX}/pa_registrations"
+    if (rejection := _prelude(request, path, None)) is not None:
+        return rejection
     return _ok(
         {"items": state.dataset["pa_registrations"], "has_more": False, "next_cursor": None},
-        chemin,
+        path,
     )
 
 
-for _spec in RESSOURCES:
-    _monter_ressource(_spec)
-for _sspec in SOUS_RESSOURCES:
-    _monter_sous_ressource(_sspec)
-for _famille, _scope_changelog in CHANGELOGS:
-    _monter_changelog(_famille, _scope_changelog)
-for _segment, _type_client in (
+for _spec in RESOURCES:
+    _mount_resource(_spec)
+for _sub_spec in SUB_RESOURCES:
+    _mount_sub_resource(_sub_spec)
+for _family, _changelog_scope in CHANGELOGS:
+    _mount_changelog(_family, _changelog_scope)
+for _segment, _customer_type in (
     ("company_customers", "company"),
     ("individual_customers", "individual"),
 ):
-    _monter_detail_client(_segment, _type_client)
-for _segment, _cle_export, _scope_export in (
+    _mount_customer_detail(_segment, _customer_type)
+for _segment, _export_key, _export_scope in (
     ("general_ledgers", "general_ledger_exports", "exports:gl"),
     ("analytical_general_ledgers", "analytical_general_ledger_exports", "exports:agl"),
     ("fecs", "fec_exports", "exports:fec"),
 ):
-    _monter_export(_segment, _cle_export, _scope_export)
+    _mount_export(_segment, _export_key, _export_scope)
 
-app.include_router(routeur)
+app.include_router(router)
 
-# Le plan de contrôle n'est pas « monté puis interdit » : quand il est
-# désactivé, la surface n'existe pas. C'est ce qui rend impossible de le
-# laisser ouvert par accident sur un cluster.
+# The control plane isn't "mounted then forbidden": when disabled, the
+# surface doesn't exist. This is what makes it impossible to accidentally
+# leave it open on a cluster.
 if settings.admin_enabled:
     from .admin import router as admin_router
 
@@ -1320,56 +1316,54 @@ if settings.admin_enabled:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Le contrat
+#  The contract
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def contrat_openapi() -> dict[str, Any]:
-    """Le contrat PUBLIÉ — la surface fournisseur, et elle seule.
+def openapi_contract() -> dict[str, Any]:
+    """The PUBLISHED contract — the provider surface, and only that.
 
-    `/__admin` et `/health` sont des affordances du MOCK : les publier ferait
-    passer pour de l'API Pennylane ce qui n'en est pas, et `/__admin` n'est
-    monté que conditionnellement — le contrat dépendrait alors de
-    l'environnement de génération, ce qui le rendrait ininterprétable.
+    `/__admin` and `/health` are affordances of the MOCK: publishing them
+    would pass off as Pennylane API something that isn't, and `/__admin` is
+    only mounted conditionally — the contract would then depend on the
+    generation environment, which would make it uninterpretable.
     """
     schema = app.openapi()
-    chemins = {
-        chemin: operations
-        for chemin, operations in schema["paths"].items()
-        if chemin.startswith(PREFIXE)
+    paths = {
+        path: operations for path, operations in schema["paths"].items() if path.startswith(PREFIX)
     }
-    contrat: dict[str, Any] = {
+    contract: dict[str, Any] = {
         "openapi": schema["openapi"],
         "info": dict(schema["info"]),
         "servers": [{"url": "https://app.pennylane.com"}],
-        "paths": chemins,
+        "paths": paths,
     }
-    composants = schema.get("components", {})
-    if composants:
-        contrat["components"] = _elaguer_schemas(composants, chemins)
-    return contrat
+    components = schema.get("components", {})
+    if components:
+        contract["components"] = _prune_schemas(components, paths)
+    return contract
 
 
-def _elaguer_schemas(composants: dict[str, Any], chemins: dict[str, Any]) -> dict[str, Any]:
-    """Retire les schémas devenus orphelins après le retrait de /__admin.
+def _prune_schemas(components: dict[str, Any], paths: dict[str, Any]) -> dict[str, Any]:
+    """Removes schemas left orphaned once /__admin is stripped out.
 
-    Sans cet élagage, le contrat porterait les modèles du plan de contrôle —
-    des formes qui n'existent nulle part chez le fournisseur.
+    Without this pruning, the contract would carry the control plane's
+    models — shapes that exist nowhere at the provider.
     """
     import json
     import re
 
-    schemas = dict(composants.get("schemas", {}))
-    utilises: set[str] = set()
-    a_visiter = set(re.findall(r"#/components/schemas/([A-Za-z0-9_.\[\]-]+)", json.dumps(chemins)))
-    while a_visiter:
-        nom = a_visiter.pop()
-        if nom in utilises or nom not in schemas:
+    schemas = dict(components.get("schemas", {}))
+    used: set[str] = set()
+    to_visit = set(re.findall(r"#/components/schemas/([A-Za-z0-9_.\[\]-]+)", json.dumps(paths)))
+    while to_visit:
+        name = to_visit.pop()
+        if name in used or name not in schemas:
             continue
-        utilises.add(nom)
-        a_visiter |= set(
-            re.findall(r"#/components/schemas/([A-Za-z0-9_.\[\]-]+)", json.dumps(schemas[nom]))
+        used.add(name)
+        to_visit |= set(
+            re.findall(r"#/components/schemas/([A-Za-z0-9_.\[\]-]+)", json.dumps(schemas[name]))
         )
-    resultat = dict(composants)
-    resultat["schemas"] = {nom: schemas[nom] for nom in sorted(utilises)}
-    return resultat
+    result = dict(components)
+    result["schemas"] = {name: schemas[name] for name in sorted(used)}
+    return result

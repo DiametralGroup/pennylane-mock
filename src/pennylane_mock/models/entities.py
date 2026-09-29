@@ -1,21 +1,21 @@
-"""Les entités servies — champs relevés sur l'OpenAPI officiel de la v2.
+"""Served entities — fields taken from the official v2 OpenAPI.
 
-┌─ TOUS LES MONTANTS SONT DES CHAÎNES ────────────────────────────────────────┐
+┌─ EVERY AMOUNT IS A STRING ───────────────────────────────────────────────────┐
 │ `amount: "230.32"`, `debit: "100.00"`, `quantity: "12"`, `weight: "0.25"`.   │
-│ Ce n'est pas une bizarrerie de sérialisation : le guide d'erreurs liste      │
-│ « amounts not sent as strings » comme cause typique de 400 à l'écriture, et  │
-│ l'OpenAPI les déclare `type: string` en lecture. Un connecteur qui reçoit un │
-│ nombre ici et le tolère se cassera contre la vraie API. Le typage numérique  │
-│ est l'affaire de la couche de staging, pas de l'extraction.                  │
+│ This isn't a serialization quirk: the error guide lists "amounts not sent   │
+│ as strings" as a typical cause of a 400 on write, and the OpenAPI declares  │
+│ them `type: string` on read. A connector that receives a number here and    │
+│ tolerates it will break against the real API. Numeric typing is the        │
+│ staging layer's job, not extraction's.                                     │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-┌─ FIDÉLITÉ GRADUÉE ──────────────────────────────────────────────────────────┐
-│ Les entités du flux financier — factures, tiers, banque, comptabilité — sont │
-│ typées champ par champ. La périphérie (devis, mandats, abonnements,          │
-│ documents commerciaux, demandes d'achat, exports) passe par                  │
-│ `ElementGenerique` : elle est SERVIE avec les champs de l'OpenAPI, mais pas  │
-│ contrainte par le modèle. C'est une décision, pas un oubli — elle est écrite │
-│ dans le README et dans docs/UNVERIFIED-FIELDS.md.                            │
+┌─ GRADED FIDELITY ────────────────────────────────────────────────────────────┐
+│ The entities of the financial flow — invoices, third parties, banking,      │
+│ accounting — are typed field by field. The periphery (quotes, mandates,     │
+│ subscriptions, commercial documents, purchase requests, exports) goes       │
+│ through `GenericElement`: it is SERVED with the OpenAPI's fields, but not    │
+│ constrained by the model. This is a decision, not an oversight — it's       │
+│ written up in the README and in docs/UNVERIFIED-FIELDS.md.                  │
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
@@ -25,60 +25,60 @@ from typing import Any
 
 from pydantic import Field
 
-from .common import Lien, Permissif, Reference, unverified
+from .common import Link, Permissive, Reference, unverified
 
 
-class ElementGenerique(Permissif):
-    """Une ressource de la périphérie : `id` et horodatages garantis, le reste
-    passe tel quel. Servie, mais pas contrainte — cf. l'encadré du module."""
+class GenericElement(Permissive):
+    """A peripheral resource: `id` and timestamps guaranteed, the rest passes
+    through as-is. Served, but not constrained — see the module's callout."""
 
     id: int
     created_at: str
     updated_at: str
 
 
-# ── Référentiels ─────────────────────────────────────────────────────────────
+# ── Reference data ────────────────────────────────────────────────────────────
 
 
-class Journal(Permissif):
-    """Un journal comptable. Notez l'absence d'horodatages : le fournisseur
-    n'en sert PAS sur cette ressource, contrairement à toutes les autres."""
+class Journal(Permissive):
+    """An accounting journal. Note the absence of timestamps: the provider
+    does NOT serve them on this resource, unlike every other one."""
 
     id: int
-    code: str = Field(description="Code du journal (VE, AC, BQ, OD, AN, SA).")
+    code: str = Field(description="Journal code (VE, AC, BQ, OD, AN, SA).")
     label: str
     type: str = Field(
         json_schema_extra=unverified(
-            "l'OpenAPI déclare `type: string` SANS énumération ; les valeurs "
-            "servies (sale, purchase, bank, miscellaneous, new_year, payroll) "
-            "suivent la nomenclature française usuelle, elles ne sont pas attestées"
+            "the OpenAPI declares `type: string` WITHOUT an enum; the served "
+            "values (sale, purchase, bank, miscellaneous, new_year, payroll) "
+            "follow the usual French nomenclature, they are not attested"
         )
     )
 
 
-class ComptePlan(Permissif):
-    """Un compte du plan comptable — général ou auxiliaire."""
+class LedgerAccount(Permissive):
+    """An account in the chart of accounts — general or auxiliary."""
 
     id: int
-    number: str = Field(description="Numéro de compte ; un auxiliaire porte des lettres.")
+    number: str = Field(description="Account number; an auxiliary account carries letters.")
     label: str
     vat_rate: str = Field(
         description=(
-            "Un CODE de taux, pas un pourcentage : `any` (l'écrasante majorité "
-            "des comptes), `exempt`, `extracom`, `crossborder`, ou `FR_200`, "
-            "`FR_55`, `FR_15_385`… Il était décrit ici comme un pourcentage en "
-            "chaîne, et le mock servait « 20.0 » — un consommateur qui le "
-            "castait en numérique passait sur le mock et tombait sur le "
-            "premier `any` du fournisseur."
+            "A rate CODE, not a percentage: `any` (the vast majority of "
+            "accounts), `exempt`, `extracom`, `crossborder`, or `FR_200`, "
+            "`FR_55`, `FR_15_385`… It used to be described here as a "
+            'percentage string, and the mock served "20.0" — a consumer '
+            "that cast it to a number passed against the mock and broke on "
+            "the provider's first `any`."
         )
     )
     country_alpha2: str
     enabled: bool
     type: str = Field(
         json_schema_extra=unverified(
-            "l'OpenAPI déclare `type: string` sans énumération ; les valeurs "
-            "servies (customer, supplier, bank, tax, income, expense, equity, "
-            "suspense) sont plausibles, pas attestées"
+            "the OpenAPI declares `type: string` without an enum; the served "
+            "values (customer, supplier, bank, tax, income, expense, equity, "
+            "suspense) are plausible, not attested"
         )
     )
     letterable: bool
@@ -86,7 +86,7 @@ class ComptePlan(Permissif):
     updated_at: str
 
 
-class Exercice(Permissif):
+class FiscalYear(Permissive):
     id: int
     start: str
     finish: str
@@ -95,17 +95,17 @@ class Exercice(Permissif):
     updated_at: str
 
 
-class GroupeCategories(Permissif):
-    """Un axe analytique. `categories` est un LIEN, pas un tableau."""
+class CategoryGroup(Permissive):
+    """An analytical axis. `categories` is a LINK, not an array."""
 
     id: int
     label: str
-    categories: Lien
+    categories: Link
     created_at: str
     updated_at: str
 
 
-class Categorie(Permissif):
+class Category(Permissive):
     id: int
     label: str
     direction: str | None = None
@@ -115,9 +115,9 @@ class Categorie(Permissif):
     updated_at: str
 
 
-class CategorieVentilee(Permissif):
-    """Une catégorie telle qu'elle apparaît SUR une écriture ou une transaction :
-    la catégorie, plus le `weight` de la ventilation — lui aussi en chaîne."""
+class AllocatedCategory(Permissive):
+    """A category as it appears ON an entry or a transaction: the category,
+    plus the allocation's `weight` — also a string."""
 
     id: int
     label: str
@@ -128,14 +128,14 @@ class CategorieVentilee(Permissif):
     updated_at: str
 
 
-class EtablissementBancaire(Permissif):
+class BankEstablishment(Permissive):
     id: int
     name: str
     created_at: str
     updated_at: str
 
 
-class CompteBancaire(Permissif):
+class BankAccount(Permissive):
     id: int
     name: str
     currency: str
@@ -147,35 +147,35 @@ class CompteBancaire(Permissif):
     updated_at: str
 
 
-# ── Tiers ────────────────────────────────────────────────────────────────────
+# ── Third parties ─────────────────────────────────────────────────────────────
 
 
-class Adresse(Permissif):
+class Address(Permissive):
     address: str
     postal_code: str
     city: str
     country_alpha2: str
 
 
-class TiersClient(Permissif):
-    """Client — personne morale OU physique.
+class Customer(Permissive):
+    """Customer — a company OR an individual.
 
-    Le fournisseur en fait un `oneOf` à deux variantes discriminées par
-    `customer_type`, et elles n'ont pas les mêmes champs : `name`/`reg_no`/
-    `vat_number` d'un côté, `first_name`/`last_name` de l'autre. Le modèle les
-    réunit avec les champs propres en optionnels — un `oneOf` pydantic
-    produirait un contrat plus juste mais rendrait la fabrique de routes
-    illisible ; la nuance est portée par la description et par le champ
-    discriminant, qui lui est requis.
+    The provider makes this a two-variant `oneOf` discriminated by
+    `customer_type`, and the two don't share the same fields: `name`/
+    `reg_no`/`vat_number` on one side, `first_name`/`last_name` on the
+    other. The model merges them, with the per-variant fields made
+    optional — a pydantic `oneOf` would produce a more accurate contract but
+    would make the route factory unreadable; the nuance is carried by the
+    description and by the discriminant field, which itself is required.
     """
 
     id: int
-    customer_type: str = Field(description="company | individual — LE discriminant.")
+    customer_type: str = Field(description="company | individual — THE discriminant.")
     name: str
-    first_name: str | None = Field(default=None, description="Personnes physiques seulement.")
-    last_name: str | None = Field(default=None, description="Personnes physiques seulement.")
-    reg_no: str | None = Field(default=None, description="Personnes morales seulement (SIREN).")
-    vat_number: str | None = Field(default=None, description="Personnes morales seulement.")
+    first_name: str | None = Field(default=None, description="Individuals only.")
+    last_name: str | None = Field(default=None, description="Individuals only.")
+    reg_no: str | None = Field(default=None, description="Companies only (SIREN).")
+    vat_number: str | None = Field(default=None, description="Companies only.")
     billing_iban: str | None = None
     payment_conditions: str
     recipient: str
@@ -184,22 +184,22 @@ class TiersClient(Permissif):
     notes: str | None = None
     ledger_account: Reference | None = None
     emails: list[str]
-    billing_address: Adresse
-    delivery_address: Adresse
+    billing_address: Address
+    delivery_address: Address
     external_reference: str
     billing_language: str
-    mandates: Lien
-    pro_account_mandates: Lien
-    contacts: Lien
+    mandates: Link
+    pro_account_mandates: Link
+    contacts: Link
     created_at: str
     updated_at: str
 
 
-class Contact(Permissif):
-    """Le contact d'un client.
+class Contact(Permissive):
+    """A customer's contact.
 
-    ⚠️ DONNÉE À CARACTÈRE PERSONNEL. Le mock la sert parce que le fournisseur
-    la sert ; un connecteur ne doit en extraire qu'une liste blanche.
+    WARNING: PERSONAL DATA. The mock serves it because the provider serves
+    it; a connector should only extract an allow-listed subset.
     """
 
     id: int
@@ -209,8 +209,8 @@ class Contact(Permissif):
     phone: str
     job_title: str = Field(
         json_schema_extra=unverified(
-            "la référence `getcustomercontacts` ne détaille pas le schéma de "
-            "l'élément ; les champs servis sont plausibles"
+            "the `getcustomercontacts` reference doesn't detail the element's "
+            "schema; the served fields are plausible"
         )
     )
     customer: Reference
@@ -218,7 +218,7 @@ class Contact(Permissif):
     updated_at: str
 
 
-class Fournisseur(Permissif):
+class Supplier(Permissive):
     id: int
     name: str
     establishment_no: str | None = None
@@ -227,7 +227,7 @@ class Fournisseur(Permissif):
     ledger_account: Reference | None = None
     emails: list[str]
     iban: str
-    postal_address: Adresse
+    postal_address: Address
     supplier_payment_method: str | None = None
     supplier_due_date_delay: int | None = None
     supplier_due_date_rule: str | None = None
@@ -236,14 +236,14 @@ class Fournisseur(Permissif):
     updated_at: str
 
 
-class Produit(Permissif):
+class Product(Permissive):
     id: int
     label: str
     description: str
     external_reference: str
     price_before_tax: str
-    vat_rate: str = Field(description="Code de taux (`FR_200` = 20 %), pas un nombre.")
-    price: str = Field(description="Le TTC. Il se LIT, il ne se recalcule pas.")
+    vat_rate: str = Field(description="Rate code (`FR_200` = 20%), not a number.")
+    price: str = Field(description="The tax-inclusive price. It's READ, never recomputed.")
     unit: str
     currency: str
     reference: str | None = None
@@ -253,22 +253,23 @@ class Produit(Permissif):
     updated_at: str
 
 
-# ── Facturation ──────────────────────────────────────────────────────────────
+# ── Invoicing ──────────────────────────────────────────────────────────────────
 
 
-class Remise(Permissif):
+class Discount(Permissive):
     type: str = Field(description="absolute | relative")
     value: str | None = None
 
 
-class FactureClient(Permissif):
-    """Une facture de vente. Un AVOIR en est une aussi : `status:
-    "credit_note"`, montants négatifs, `credited_invoice` renseigné — pas une
-    entité d'un autre type. Sommer `amount` sans regarder le signe fausse le CA."""
+class CustomerInvoice(Permissive):
+    """A sales invoice. A CREDIT NOTE is one too: `status:
+    "credit_note"`, negative amounts, `credited_invoice` set — not a
+    separate entity type. Summing `amount` without checking the sign
+    misstates revenue."""
 
     id: int
     label: str | None = None
-    invoice_number: str = Field(description="Vide tant que la facture est un brouillon.")
+    invoice_number: str = Field(description="Empty while the invoice is a draft.")
     currency: str
     amount: str
     currency_amount: str
@@ -277,17 +278,17 @@ class FactureClient(Permissif):
     date: str | None = None
     deadline: str | None = Field(
         default=None,
-        description="Échéance SERVIE : elle dépend des conditions du client, "
-        "elle ne se déduit pas de `date`.",
+        description="Due date as SERVED: it depends on the customer's payment "
+        "terms, it isn't derived from `date`.",
     )
     currency_tax: str
     tax: str
     language: str
     paid: bool
     status: str
-    discount: Remise
+    discount: Discount
     ledger_entry: Reference | None = Field(
-        default=None, description="`null` sur un brouillon : un brouillon n'a pas d'écriture."
+        default=None, description="`null` on a draft: a draft has no ledger entry."
     )
     public_file_url: str | None = None
     filename: str | None = None
@@ -296,10 +297,10 @@ class FactureClient(Permissif):
     draft: bool
     special_mention: str | None = None
     customer: Reference | None = None
-    invoice_line_sections: Lien
-    invoice_lines: Lien
-    custom_header_fields: Lien
-    categories: Lien
+    invoice_line_sections: Link
+    invoice_lines: Link
+    custom_header_fields: Link
+    categories: Link
     pdf_invoice_free_text: str
     pdf_invoice_subject: str
     pdf_description: str | None = None
@@ -307,9 +308,9 @@ class FactureClient(Permissif):
     credited_invoice: Reference | None = None
     customer_invoice_template: Reference | None = None
     transaction_reference: dict[str, Any] | None = None
-    payments: Lien
-    matched_transactions: Lien
-    appendices: Lien
+    payments: Link
+    matched_transactions: Link
+    appendices: Link
     quote: Reference | None = None
     external_reference: str
     e_invoicing: dict[str, Any] | None = None
@@ -320,7 +321,7 @@ class FactureClient(Permissif):
     updated_at: str
 
 
-class LigneFacture(Permissif):
+class InvoiceLine(Permissive):
     id: int
     label: str
     unit: str | None = None
@@ -334,7 +335,7 @@ class LigneFacture(Permissif):
     currency_tax: str
     tax: str
     raw_currency_unit_price: str
-    discount: Remise | None = None
+    discount: Discount | None = None
     section_rank: int | None = None
     imputation_dates: dict[str, str] | None = None
     ledger_account: Reference | None = None
@@ -342,13 +343,13 @@ class LigneFacture(Permissif):
     updated_at: str
 
 
-class Reglement(Permissif):
-    """Un règlement rattaché à une facture.
+class Payment(Permissive):
+    """A payment attached to an invoice.
 
-    ⚠️ Un `payment` n'est PAS une `matched_transaction` : le premier est le
-    règlement enregistré sur la facture, la seconde le mouvement bancaire
-    apparié. Le fournisseur consacre une page entière à la distinction, et un
-    consommateur qui les additionne compte deux fois l'encaissement.
+    WARNING: a `payment` is NOT a `matched_transaction`: the former is the
+    payment recorded on the invoice, the latter the reconciled bank
+    movement. The provider devotes an entire page to the distinction, and a
+    consumer that adds them up counts the payment twice.
     """
 
     id: int
@@ -360,7 +361,7 @@ class Reglement(Permissif):
     updated_at: str
 
 
-class FactureFournisseur(Permissif):
+class SupplierInvoice(Permissive):
     id: int
     label: str | None = None
     invoice_number: str
@@ -383,13 +384,13 @@ class FactureFournisseur(Permissif):
     remaining_amount_without_tax: str | None = None
     ledger_entry: Reference | None = None
     supplier: Reference | None = None
-    invoice_lines: Lien
-    categories: Lien
+    invoice_lines: Link
+    categories: Link
     transaction_reference: dict[str, Any] | None = None
     payment_status: str
     paid: bool
-    payments: Lien
-    matched_transactions: Lien
+    payments: Link
+    matched_transactions: Link
     external_reference: str
     import_source: dict[str, Any] | None = None
     e_invoicing: dict[str, Any] | None = None
@@ -398,12 +399,12 @@ class FactureFournisseur(Permissif):
     updated_at: str
 
 
-# ── Banque ───────────────────────────────────────────────────────────────────
+# ── Banking ────────────────────────────────────────────────────────────────────
 
 
-class Transaction(Permissif):
-    """Un mouvement bancaire. `amount` est SIGNÉ ; `outstanding_balance` vaut
-    `null` quand il n'y a rien à rapprocher et un montant quand il en reste."""
+class Transaction(Permissive):
+    """A bank movement. `amount` is SIGNED; `outstanding_balance` is `null`
+    when there's nothing left to reconcile and an amount when there is."""
 
     id: int
     label: str | None = None
@@ -420,21 +421,21 @@ class Transaction(Permissif):
     pro_account_expense: dict[str, Any] | None = None
     customer: Reference | None = None
     supplier: Reference | None = None
-    categories: list[CategorieVentilee]
-    matched_invoices: Lien
+    categories: list[AllocatedCategory]
+    matched_invoices: Link
     interbank_code: str | None = None
     archived_at: str | None = None
     created_at: str
     updated_at: str
 
 
-# ── Comptabilité ─────────────────────────────────────────────────────────────
+# ── Accounting ─────────────────────────────────────────────────────────────────
 
 
-class Ecriture(Permissif):
-    """Une écriture comptable. Toutes n'ont PAS de facture : la paie et les
-    frais bancaires n'en ont aucune. Supposer « une écriture = une pièce »
-    fait perdre des charges entières."""
+class LedgerEntry(Permissive):
+    """An accounting entry. Not all of them have an invoice: payroll and
+    bank fees have none. Assuming "one entry = one document" loses whole
+    expense categories."""
 
     id: int
     label: str | None = None
@@ -445,37 +446,38 @@ class Ecriture(Permissif):
     journal_id: int
     journal: Reference
     status: str | None = None
-    categories: list[CategorieVentilee]
+    categories: list[AllocatedCategory]
     ledger_attachment_filename: str | None = None
     attachment: dict[str, Any] | None = None
     created_at: str
     updated_at: str
 
 
-class LigneEcriture(Permissif):
-    """Une ligne d'écriture. `debit` et `credit` coexistent : l'un des deux vaut
-    `"0.00"`, jamais `null`, et il n'y a pas de montant signé unique."""
+class LedgerEntryLine(Permissive):
+    """An entry line. `debit` and `credit` coexist: one of the two is
+    `"0.00"`, never `null`, and there is no single signed amount."""
 
     id: int
     debit: str
     credit: str
     label: str
-    categories: list[CategorieVentilee]
+    categories: list[AllocatedCategory]
     ledger_account: dict[str, Any]
     journal: Reference
     date: str
     ledger_entry: Reference
     lettered_ledger_entry_lines: dict[str, Any] = Field(
-        description="Les lignes lettrées AVEC celle-ci — c'est ce qui distingue "
-        "une créance soldée d'une créance ouverte."
+        description="The lines lettered WITH this one — this is what "
+        "distinguishes a settled receivable from an open one."
     )
     created_at: str
     updated_at: str
 
 
-class LigneBalance(Permissif):
-    """Une ligne de balance. La seule ressource du mock SANS `id` ni horodatage :
-    elle est calculée, pas stockée. Un consommateur qui l'attend échoue ici."""
+class TrialBalanceLine(Permissive):
+    """A trial balance line. The mock's only resource WITHOUT an `id` or
+    timestamps: it's computed, not stored. A consumer that expects one
+    fails here."""
 
     number: str
     formatted_number: str
@@ -484,12 +486,12 @@ class LigneBalance(Permissif):
     credits: str
 
 
-# ── Changelogs et profil ─────────────────────────────────────────────────────
+# ── Changelogs and profile ─────────────────────────────────────────────────────
 
 
-class EvenementChangelog(Permissif):
-    """Un changement. Il porte l'ID et l'opération, **jamais l'état** : il faut
-    un second appel, par lots, pour obtenir la ressource."""
+class ChangelogEvent(Permissive):
+    """A change. It carries the ID and the operation, **never the state**: a
+    second, batched call is needed to get the resource."""
 
     id: int
     operation: str = Field(description="insert | update | delete")
@@ -498,9 +500,10 @@ class EvenementChangelog(Permissif):
     updated_at: str
 
 
-class ProfilUtilisateur(Permissif):
-    """`GET /me` — le seul endpoint SANS scope requis, donc le test de fumée
-    naturel d'un connecteur : il dit qui on est et ce qu'on a le droit de lire."""
+class UserProfile(Permissive):
+    """`GET /me` — the only endpoint WITHOUT a required scope, hence a
+    connector's natural smoke test: it says who you are and what you're
+    allowed to read."""
 
     user: dict[str, Any] | None
     company: dict[str, Any]

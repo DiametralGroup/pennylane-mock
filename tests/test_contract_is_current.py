@@ -1,14 +1,14 @@
-"""Le contrat committé ne doit pas dériver de l'application, et l'honnêteté est
-une contrainte de build.
+"""The committed contract must not drift from the application, and honesty is
+a build constraint.
 
-Deux propriétés, et elles se tiennent :
+Two properties, and they hold together:
 
-  1. `contracts/pennylane.openapi.yaml` EST ce que l'application sert. C'est ce
-     fichier que le consommateur copie chez lui, épinglé à une version de
-     l'image ; s'il ment, il ment pour tout le monde en aval.
-  2. Tout champ marqué `unverified` est inscrit au registre. Sans ce test, le
-     marqueur deviendrait décoratif — on le poserait sans jamais écrire ce
-     qu'il faudrait faire pour lever le doute.
+  1. `contracts/pennylane.openapi.yaml` IS what the application serves. This
+     is the file a consumer copies into their own repo, pinned to an image
+     version; if it lies, it lies for everyone downstream.
+  2. Every field marked `unverified` is registered. Without this test, the
+     marker would become decorative — it would get applied without ever
+     writing down what it would take to remove the doubt.
 """
 
 from __future__ import annotations
@@ -26,24 +26,24 @@ CONTRAT = RACINE / "contracts" / "pennylane.openapi.yaml"
 REGISTRE = RACINE / "docs" / "UNVERIFIED-FIELDS.md"
 
 
-def test_le_contrat_committe_est_a_jour():
+def test_committed_contract_is_current():
     genere = yaml.safe_load(
-        yaml.safe_dump(mock.contrat_openapi(), sort_keys=False, allow_unicode=True)
+        yaml.safe_dump(mock.openapi_contract(), sort_keys=False, allow_unicode=True)
     )
     committe = yaml.safe_load(CONTRAT.read_text(encoding="utf-8"))
     assert committe == genere, (
-        "Le contrat committé a dérivé de l'application. Lancer `make contract`, "
-        "RELIRE le diff — une forme de réponse qui change est un changement de "
-        "contrat pour les consommateurs, qui en gardent une copie épinglée — "
-        "puis committer."
+        "The committed contract has drifted from the application. Run "
+        "`make contract`, REVIEW the diff — a response shape that changes is "
+        "a contract change for consumers, who keep a pinned copy of it — "
+        "then commit."
     )
 
 
-def test_le_contrat_ne_publie_pas_les_affordances_du_mock():
-    """`/__admin` et `/health` n'existent pas chez Pennylane. Les publier ferait
-    passer pour de l'API fournisseur ce qui n'en est pas — et `/__admin` n'est
-    monté que conditionnellement, donc le contrat dépendrait de l'environnement
-    de génération, ce qui le rendrait ininterprétable."""
+def test_contract_does_not_publish_the_mock_s_affordances():
+    """`/__admin` and `/health` don't exist at Pennylane. Publishing them
+    would pass off as provider API what isn't — and `/__admin` is only
+    mounted conditionally, so the contract would depend on the environment
+    it was generated in, which would make it uninterpretable."""
     contrat = yaml.safe_load(CONTRAT.read_text(encoding="utf-8"))
     assert all(chemin.startswith("/api/external/v2/") for chemin in contrat["paths"])
     brut = CONTRAT.read_text(encoding="utf-8")
@@ -51,78 +51,80 @@ def test_le_contrat_ne_publie_pas_les_affordances_du_mock():
     assert "/health" not in brut
 
 
-def test_le_contrat_annonce_le_serveur_du_fournisseur():
-    """Un client généré depuis ce contrat doit pointer vers Pennylane, pas vers
-    localhost : le mock se substitue par la configuration, pas par le contrat."""
+def test_contract_advertises_the_provider_s_server():
+    """A client generated from this contract must point at Pennylane, not at
+    localhost: the mock substitutes itself via configuration, not via the
+    contract."""
     contrat = yaml.safe_load(CONTRAT.read_text(encoding="utf-8"))
     assert contrat["servers"] == [{"url": "https://app.pennylane.com"}]
 
 
-def test_le_contrat_couvre_les_quatre_vingt_onze_operations():
+def test_contract_covers_the_ninety_one_operations():
     contrat = yaml.safe_load(CONTRAT.read_text(encoding="utf-8"))
     operations = [op for chemin in contrat["paths"].values() for op in chemin]
     assert len(operations) == 91
-    assert set(operations) == {"get"}, "la surface est en LECTURE seule"
+    assert set(operations) == {"get"}, "the surface is READ-only"
 
 
-def test_le_contrat_documente_la_pagination():
-    """Sans `cursor` dans le contrat, un consommateur ne saurait pas qu'il doit
-    paginer — et un générateur de client ne produirait pas le paramètre."""
+def test_contract_documents_pagination():
+    """Without `cursor` in the contract, a consumer wouldn't know they must
+    paginate — and a client generator wouldn't produce the parameter."""
     contrat = yaml.safe_load(CONTRAT.read_text(encoding="utf-8"))
     liste = contrat["paths"]["/api/external/v2/customer_invoices"]["get"]
     noms = [parametre["name"] for parametre in liste["parameters"]]
     assert noms == ["cursor", "limit", "sort", "filter"]
-    assert noms.count("cursor") == 1, "un paramètre publié deux fois casse les générateurs"
+    assert noms.count("cursor") == 1, "a parameter published twice breaks generators"
 
     reponse = liste["responses"]["200"]["content"]["application/json"]["schema"]
     reference = reponse["$ref"].rsplit("/", 1)[-1]
     schema = contrat["components"]["schemas"][reference]
-    # Les trois clés du curseur, toujours — c'est la voie sûre, présente sur
-    # les seize collections. Les quatre clés d'offset sont déclarées à côté
-    # parce que quatre collections les rendent (cf. test_pagination.py) ; le
-    # contrat doit les documenter, sinon un générateur de client les rejette.
+    # The three cursor keys, always — that's the safe path, present on all
+    # sixteen collections. The four offset keys are declared alongside
+    # because four collections render them (see test_pagination.py); the
+    # contract must document them, otherwise a client generator rejects them.
     assert {"items", "has_more", "next_cursor"} <= set(schema["properties"])
 
 
-def test_le_contrat_documente_les_modes_de_panne():
-    """Un contrat qui ne décrirait que le chemin heureux ne dirait pas au
-    consommateur quelles pannes il doit savoir traiter."""
+def test_contract_documents_the_failure_modes():
+    """A contract that only described the happy path wouldn't tell the
+    consumer which failures they need to handle."""
     contrat = yaml.safe_load(CONTRAT.read_text(encoding="utf-8"))
     reponses = contrat["paths"]["/api/external/v2/customers"]["get"]["responses"]
     assert {"400", "401", "403", "404", "422", "429", "500", "503"} <= set(reponses)
-    # Le 429 est en TEXTE BRUT, et le contrat doit le dire.
+    # The 429 is PLAIN TEXT, and the contract must say so.
     assert "text/plain" in reponses["429"]["content"]
 
 
-def test_tout_champ_non_verifie_est_inscrit_au_registre():
-    """L'honnêteté est une contrainte de build : un marqueur qu'on peut poser
-    sans rien écrire devient décoratif en trois commits."""
-    assert REGISTRE.exists(), f"{REGISTRE} est obligatoire"
+def test_every_unverified_field_is_registered():
+    """Honesty is a build constraint: a marker that can be applied without
+    writing anything down becomes decorative within three commits."""
+    assert REGISTRE.exists(), f"{REGISTRE} is required"
     registre = REGISTRE.read_text(encoding="utf-8")
 
-    brut = json.dumps(mock.contrat_openapi(), ensure_ascii=False)
+    brut = json.dumps(mock.openapi_contract(), ensure_ascii=False)
     marques = re.findall(r'"x-pennylane-confidence":\s*"(unverified|invented)"', brut)
     assert marques, (
-        "aucun champ marqué : soit tout est attesté (et il faut le prouver), "
-        "soit le marquage a été perdu"
+        "no field marked: either everything is attested (and it must be "
+        "proven), or the marking was lost"
     )
 
-    # Chaque ressource porteuse d'un champ marqué doit apparaître au registre.
-    schemas = mock.contrat_openapi().get("components", {}).get("schemas", {})
+    # Every resource carrying a marked field must appear in the registry.
+    schemas = mock.openapi_contract().get("components", {}).get("schemas", {})
     for nom, schema in schemas.items():
         for champ, definition in (schema.get("properties") or {}).items():
             if "x-pennylane-confidence" not in json.dumps(definition, ensure_ascii=False):
                 continue
             assert f"`{champ}`" in registre, (
-                f"le champ `{champ}` de {nom} est marqué non vérifié mais "
-                f"n'est pas inscrit dans docs/UNVERIFIED-FIELDS.md — "
-                "y ajouter une ligne, avec ce qu'il faudrait faire pour lever le doute"
+                f"field `{champ}` of {nom} is marked unverified but is not "
+                "registered in docs/UNVERIFIED-FIELDS.md — "
+                "add a line there, with what it would take to remove the doubt"
             )
 
 
-def test_le_registre_porte_son_front_matter():
-    """Le front-matter dit d'où vient la vérité et ce qui doit déclencher une
-    relecture. Sans lui, le fichier vieillit sans qu'on sache de quand il date."""
+def test_registry_carries_its_front_matter():
+    """The front matter says where the truth comes from and what should
+    trigger a re-review. Without it, the file ages without anyone knowing how
+    stale it is."""
     texte = REGISTRE.read_text(encoding="utf-8")
     assert texte.startswith("---\n")
     entete = yaml.safe_load(texte.split("---", 2)[1])

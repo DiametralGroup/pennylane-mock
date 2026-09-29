@@ -1,8 +1,8 @@
-"""L'évolution du monde — ce qui rend l'extraction incrémentale éprouvable.
+"""The evolution of the world — what makes incremental extraction testable.
 
-Aucun test ne dort : le temps défile EXPLICITEMENT via `/__admin/clock` ou
-`/__admin/evolve`. Une suite qui `sleep(60)` pour voir un événement est une
-suite qu'on finit par désactiver.
+No test sleeps: time advances EXPLICITLY via `/__admin/clock` or
+`/__admin/evolve`. A suite that `sleep(60)`s to see an event is a suite that
+eventually gets disabled.
 """
 
 from __future__ import annotations
@@ -26,44 +26,43 @@ def _ecart_balance(client) -> Decimal:
     return sum((Decimal(x["debits"]) - Decimal(x["credits"]) for x in lignes), Decimal(0))
 
 
-def test_le_monde_ne_bouge_pas_tout_seul_pendant_la_suite(client):
-    """L'intervalle est poussé à 3600 s par le conftest : aucun événement ne se
-    déclenche au fil de l'horloge murale, même sur une CI lente."""
+def test_the_world_does_not_move_on_its_own_during_the_suite(client):
+    """The interval is pushed to 3600 s by the conftest: no event fires on
+    wall-clock time, even on a slow CI."""
     avant = client.get(f"{BASE}/customer_invoices?limit=100", headers=H).json()["items"]
     apres = client.get(f"{BASE}/customer_invoices?limit=100", headers=H).json()["items"]
     assert avant == apres
-    assert _totaux(client)["evolution"]["rang"] == 0
+    assert _totaux(client)["evolution"]["rank"] == 0
 
 
 @pytest.mark.parametrize("pas", [1, 6, 13, 30])
-def test_la_balance_equilibre_encore_apres_evolution(client, pas):
-    """L'invariant comptable tient AUSSI pendant que le monde vit. Un mock
-    qu'on a laissé tourner une heure ne doit pas finir par servir une
-    comptabilité fausse."""
-    client.post("/__admin/evolve", headers=ADMIN, json={"pas": pas})
+def test_trial_balance_still_balances_after_evolution(client, pas):
+    """The accounting invariant holds ALSO while the world is alive. A mock
+    left running for an hour must not end up serving false books."""
+    client.post("/__admin/evolve", headers=ADMIN, json={"steps": pas})
     assert _ecart_balance(client) == 0
 
 
-def test_l_evolution_est_deterministe(client):
-    """L'événement k tire son aléa de `Random(f"{seed}:{k}")` : deux mocks
-    avancés du même nombre de pas produisent le même monde. Sans cela, un test
-    d'incrémentalité ne serait pas rejouable."""
-    client.post("/__admin/evolve", headers=ADMIN, json={"pas": 8})
+def test_evolution_is_deterministic(client):
+    """Event k draws its randomness from `Random(f"{seed}:{k}")`: two mocks
+    advanced by the same number of steps produce the same world. Without
+    this, an incrementality test wouldn't be replayable."""
+    client.post("/__admin/evolve", headers=ADMIN, json={"steps": 8})
     premier = client.get(f"{BASE}/customer_invoices?limit=100&sort=id", headers=H).json()
 
     client.post("/__admin/reset", headers=ADMIN, json={})
-    client.post("/__admin/evolve", headers=ADMIN, json={"pas": 8})
+    client.post("/__admin/evolve", headers=ADMIN, json={"steps": 8})
     second = client.get(f"{BASE}/customer_invoices?limit=100&sort=id", headers=H).json()
     assert premier == second
 
 
-def test_une_nouvelle_facture_apparait_et_est_journalisee(client):
+def test_a_new_invoice_appears_and_is_logged(client):
     avant = client.get(f"{BASE}/customer_invoices?limit=100", headers=H).json()
     borne = client.get(f"{BASE}/changelogs/customer_invoices?limit=1000", headers=H).json()
     borne_at = borne["items"][-1]["processed_at"]
 
-    # Le cycle place une création en troisième position.
-    client.post("/__admin/evolve", headers=ADMIN, json={"pas": 3})
+    # The cycle places a creation in third position.
+    client.post("/__admin/evolve", headers=ADMIN, json={"steps": 3})
     apres = client.get(f"{BASE}/customer_invoices?limit=100", headers=H).json()
     assert len(apres["items"]) > len(avant["items"])
 
@@ -71,10 +70,10 @@ def test_une_nouvelle_facture_apparait_et_est_journalisee(client):
         f"{BASE}/changelogs/customer_invoices?limit=1000&start_date={borne_at}", headers=H
     ).json()["items"]
     inserts = [e for e in nouveaux if e["operation"] == "insert" and e["processed_at"] > borne_at]
-    assert inserts, "une création doit produire un événement `insert`"
+    assert inserts, "a creation must produce an `insert` event"
 
 
-def test_un_reglement_solde_la_facture_et_cree_une_transaction(client):
+def test_a_payment_settles_the_invoice_and_creates_a_transaction(client):
     impayees_avant = [
         f
         for f in client.get(f"{BASE}/customer_invoices?limit=100", headers=H).json()["items"]
@@ -82,7 +81,7 @@ def test_un_reglement_solde_la_facture_et_cree_une_transaction(client):
     ]
     transactions_avant = client.get(f"{BASE}/transactions?limit=100", headers=H).json()["items"]
 
-    client.post("/__admin/evolve", headers=ADMIN, json={"pas": 2})
+    client.post("/__admin/evolve", headers=ADMIN, json={"steps": 2})
 
     impayees_apres = [
         f
@@ -94,14 +93,14 @@ def test_un_reglement_solde_la_facture_et_cree_une_transaction(client):
     assert len(transactions_apres) == len(transactions_avant) + 1
 
 
-def test_les_horodatages_d_evolution_sont_strictement_posterieurs_au_jeu_de_base(client, donnees):
-    """Un curseur posé sur le jeu de base doit rendre zéro ligne, et le PREMIER
-    événement d'évolution est le premier changement qu'il verra. Sans cette
-    stricte postériorité, un test d'incrémentalité passerait par accident."""
+def test_evolution_timestamps_are_strictly_later_than_the_base_dataset(client, donnees):
+    """A cursor placed on the base dataset must render zero lines, and the
+    FIRST evolution event is the first change it sees. Without this strict
+    posteriority, an incrementality test would pass by accident."""
     from conftest import tout_paginer
 
     plafond = max(f["updated_at"] for f in donnees["customer_invoices"])
-    client.post("/__admin/evolve", headers=ADMIN, json={"pas": 4})
+    client.post("/__admin/evolve", headers=ADMIN, json={"steps": 4})
     nouveaux = [
         f
         for f in tout_paginer(client, f"{BASE}/customer_invoices", limite=100)
@@ -110,29 +109,29 @@ def test_les_horodatages_d_evolution_sont_strictement_posterieurs_au_jeu_de_base
     assert nouveaux
 
 
-def test_l_horloge_virtuelle_declenche_l_evolution(client):
-    """`/__admin/clock` fait défiler le temps sans dormir. Avec un intervalle à
-    3600 s, avancer de deux heures doit produire exactement deux événements."""
-    assert _totaux(client)["evolution"]["rang"] == 0
+def test_the_virtual_clock_triggers_evolution(client):
+    """`/__admin/clock` advances time without sleeping. With a 3600 s
+    interval, advancing two hours must produce exactly two events."""
+    assert _totaux(client)["evolution"]["rank"] == 0
     client.post("/__admin/clock", headers=ADMIN, json={"advance_seconds": 7200})
-    assert _totaux(client)["evolution"]["rang"] == 2
+    assert _totaux(client)["evolution"]["rank"] == 2
 
 
-def test_le_journal_d_evolution_est_observable(client):
-    client.post("/__admin/evolve", headers=ADMIN, json={"pas": 6})
-    journal = _totaux(client)["evolution"]["journal"]
-    assert [e["genre"] for e in journal] == [
-        "maj_facture_client",
-        "reglement_client",
-        "nouvelle_facture_client",
-        "maj_client",
-        "facture_fournisseur",
-        "transaction_orpheline",
+def test_the_evolution_log_is_observable(client):
+    client.post("/__admin/evolve", headers=ADMIN, json={"steps": 6})
+    journal = _totaux(client)["evolution"]["log"]
+    assert [e["kind"] for e in journal] == [
+        "customer_invoice_update",
+        "customer_payment",
+        "new_customer_invoice",
+        "customer_update",
+        "supplier_invoice",
+        "orphan_transaction",
     ]
 
 
-def test_un_reset_rearme_la_chronologie(client):
-    client.post("/__admin/evolve", headers=ADMIN, json={"pas": 5})
-    assert _totaux(client)["evolution"]["rang"] == 5
+def test_a_reset_rewinds_the_timeline(client):
+    client.post("/__admin/evolve", headers=ADMIN, json={"steps": 5})
+    assert _totaux(client)["evolution"]["rank"] == 5
     client.post("/__admin/reset", headers=ADMIN, json={})
-    assert _totaux(client)["evolution"]["rang"] == 0
+    assert _totaux(client)["evolution"]["rank"] == 0

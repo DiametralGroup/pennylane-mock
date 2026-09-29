@@ -1,9 +1,9 @@
-"""Point d'entrée conteneur : `python -m pennylane_mock`.
+"""Container entry point: `python -m pennylane_mock`.
 
-Volontairement minimal — pas de CLI, pas d'options. Tout se configure par
-variables d'environnement (cf. settings.py), parce que c'est le seul mécanisme
-qui marche identiquement en docker compose, en Deployment Kubernetes et en
-service GitHub Actions.
+Deliberately minimal — no CLI, no options. Everything is configured via
+environment variables (cf. settings.py), because that's the only mechanism
+that works identically in docker compose, a Kubernetes Deployment and a
+GitHub Actions service.
 """
 
 from __future__ import annotations

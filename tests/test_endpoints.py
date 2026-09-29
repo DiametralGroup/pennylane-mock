@@ -1,8 +1,8 @@
-"""Les 91 opérations GET de la surface v2 — toutes montées, toutes servies.
+"""The 91 GET operations of the v2 surface — all mounted, all served.
 
-Le test qui compte ici n'est pas « la route existe » mais « aucune route n'a
-été oubliée par la fabrique » : c'est elle qui applique le scope, les
-injections et l'enveloppe, et une route montée à la main y échapperait.
+The test that matters here isn't "the route exists" but "no route was
+forgotten by the factory" — it's the factory that applies the scope, the
+injections and the envelope, and a hand-mounted route would escape it.
 """
 
 from __future__ import annotations
@@ -12,23 +12,23 @@ from conftest import BASE, H
 
 import pennylane_mock as mock
 
-#: Toutes les routes GET publiées par le contrat, avec l'identifiant à
-#: substituer aux paramètres de chemin.
+#: All GET routes published by the contract, with the identifier to
+#: substitute for path parameters.
 ROUTES = sorted(
-    chemin for chemin, operations in mock.contrat_openapi()["paths"].items() if "get" in operations
+    chemin for chemin, operations in mock.openapi_contract()["paths"].items() if "get" in operations
 )
 
 
-def test_la_surface_compte_les_quatre_vingt_onze_operations_du_fournisseur():
-    """91 GET relevées sur l'OpenAPI officiel (163 pages de référence fusionnées,
-    cf. docs/EXTRACTION.md). Le compte est une assertion : si la fabrique en
-    perd une, ce test le dit avant qu'un consommateur ne le découvre."""
+def test_surface_counts_the_provider_s_ninety_one_operations():
+    """91 GETs found on the official OpenAPI spec (163 reference pages
+    merged, see docs/EXTRACTION.md). The count is an assertion: if the
+    factory loses one, this test says so before a consumer discovers it."""
     assert len(ROUTES) == 91
 
 
-#: L'identifiant à substituer quand `1` n'existe pas dans la collection visée.
-#: Les clients particuliers commencent après les personnes morales, et chaque
-#: type d'export a son propre identifiant dans le jeu.
+#: The identifier to substitute when `1` doesn't exist in the targeted
+#: collection. Individual customers come after companies, and each export
+#: type has its own identifier in the dataset.
 IDENT_PAR_ROUTE = {
     f"{BASE}/individual_customers/{{ident}}": 11,
     f"{BASE}/exports/general_ledgers/{{ident}}": 1,
@@ -38,7 +38,7 @@ IDENT_PAR_ROUTE = {
 
 
 @pytest.mark.parametrize("chemin", ROUTES)
-def test_chaque_route_repond_200(client, chemin):
+def test_every_route_returns_200(client, chemin):
     ident = IDENT_PAR_ROUTE.get(chemin, 1)
     url = BASE + chemin.removeprefix(BASE).replace("{ident}", str(ident))
     if url.endswith("/trial_balance"):
@@ -48,16 +48,16 @@ def test_chaque_route_repond_200(client, chemin):
 
 
 @pytest.mark.parametrize("chemin", ROUTES)
-def test_aucune_route_ne_passe_a_cote_de_l_authentification(client, chemin):
-    """La fabrique garantit le prélude ; ce test le prouve route par route.
-    Une seule route montée à la main servirait des données sans jeton."""
+def test_no_route_bypasses_authentication(client, chemin):
+    """The factory guarantees the prelude; this test proves it route by
+    route. A single hand-mounted route would serve data without a token."""
     ident = IDENT_PAR_ROUTE.get(chemin, 1)
     url = BASE + chemin.removeprefix(BASE).replace("{ident}", str(ident))
     reponse = client.get(url)
-    assert reponse.status_code == 401, f"{url} répond sans jeton"
+    assert reponse.status_code == 401, f"{url} responds without a token"
 
 
-def test_un_identifiant_inconnu_rend_404(client):
+def test_an_unknown_identifier_renders_404(client):
     for url in (
         f"{BASE}/customers/999999",
         f"{BASE}/customer_invoices/999999",
@@ -69,10 +69,10 @@ def test_un_identifiant_inconnu_rend_404(client):
         assert reponse.json() == {"error": "Not Found", "status": 404}
 
 
-def test_les_deux_variantes_de_client_sont_discriminees(client, donnees):
-    """`/company_customers/{id}` et `/individual_customers/{id}` servent la même
-    entité que `/customers/{id}`, mais rendent 404 quand le type ne correspond
-    pas — c'est la seule façon dont le fournisseur le dit."""
+def test_the_two_customer_variants_are_discriminated(client, donnees):
+    """`/company_customers/{id}` and `/individual_customers/{id}` serve the
+    same entity as `/customers/{id}`, but render 404 when the type doesn't
+    match — it's the only way the provider signals it."""
     morale = next(c for c in donnees["customers"] if c["customer_type"] == "company")
     physique = next(c for c in donnees["customers"] if c["customer_type"] == "individual")
 
@@ -82,9 +82,9 @@ def test_les_deux_variantes_de_client_sont_discriminees(client, donnees):
     assert client.get(f"{BASE}/individual_customers/{morale['id']}", headers=H).status_code == 404
 
 
-def test_les_deux_variantes_n_ont_pas_les_memes_champs(client):
-    """Un consommateur qui lit `reg_no` sans regarder `customer_type` reçoit un
-    KeyError sur la onzième ligne, jamais sur la première."""
+def test_the_two_variants_do_not_share_the_same_fields(client):
+    """A consumer who reads `reg_no` without checking `customer_type` gets a
+    KeyError on the eleventh line, never on the first."""
     clients = client.get(f"{BASE}/customers?limit=100", headers=H).json()["items"]
     morales = [c for c in clients if c["customer_type"] == "company"]
     physiques = [c for c in clients if c["customer_type"] == "individual"]
@@ -94,16 +94,16 @@ def test_les_deux_variantes_n_ont_pas_les_memes_champs(client):
     assert all(not c.get("reg_no") for c in physiques)
 
 
-def test_une_sous_collection_vide_est_servie_et_bien_formee(client):
-    """Annexes, sections, champs d'en-tête : Boréal Conseil n'en a aucun. La
-    route existe quand même et rend une page vide — la faire répondre 404
-    apprendrait au consommateur exactement le contraire de ce qu'il doit faire."""
+def test_an_empty_sub_collection_is_served_and_well_formed(client):
+    """Appendices, sections, header fields: Boréal Conseil has none. The
+    route exists anyway and renders an empty page — making it 404 would
+    teach the consumer exactly the opposite of what they should do."""
     for chemin in ("appendices", "invoice_line_sections", "custom_header_fields", "installments"):
         corps = client.get(f"{BASE}/customer_invoices/1/{chemin}", headers=H).json()
         assert corps == {"items": [], "has_more": False, "next_cursor": None}
 
 
-def test_les_lignes_d_une_facture_passent_par_leur_lien(client):
+def test_invoice_lines_are_reached_through_their_link(client):
     facture = client.get(f"{BASE}/customer_invoices/1", headers=H).json()
     lien = facture["invoice_lines"]["url"]
     chemin = lien.replace("https://app.pennylane.com", "")
@@ -112,8 +112,9 @@ def test_les_lignes_d_une_facture_passent_par_leur_lien(client):
     assert all(ligne["id"] // 100 == facture["id"] for ligne in lignes)
 
 
-def test_pa_registrations_n_exige_aucun_scope(client):
-    """Avec `/me`, c'est le seul endpoint de la surface sans scope déclaré."""
+def test_pa_registrations_requires_no_scope(client):
+    """Along with `/me`, it's the only endpoint on the surface with no
+    declared scope."""
     from conftest import ADMIN
 
     client.post("/__admin/scopes", headers=ADMIN, json={"scopes": []})

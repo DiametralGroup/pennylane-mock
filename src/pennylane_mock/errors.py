@@ -1,30 +1,30 @@
-"""Enveloppe d'erreur — la forme déclarée par l'OpenAPI officiel de la v2.
+"""Error envelope — the shape declared by the official v2 OpenAPI.
 
-┌─ DEUX SOURCES QUI NE DISENT PAS LA MÊME CHOSE ──────────────────────────────┐
-│ Le guide « Error Handling & Status Codes » (relevé le 2026-02-06) montre     │
+┌─ TWO SOURCES THAT DISAGREE ──────────────────────────────────────────────────┐
+│ The "Error Handling & Status Codes" guide (checked 2026-02-06) shows         │
 │                                                                              │
 │     {"error": "unprocessable_entity", "message": "...", "details": {...}}    │
 │                                                                              │
-│ tandis que l'OpenAPI embarqué dans CHACUNE des 91 opérations GT de la        │
-│ référence déclare, uniformément :                                            │
+│ while the OpenAPI embedded in EACH of the 91 GET operations in the           │
+│ reference declares, uniformly:                                              │
 │                                                                              │
-│     {"error": "<message lisible>", "status": <entier>}                      │
+│     {"error": "<readable message>", "status": <integer>}                    │
 │                                                                              │
-│ C'est l'OpenAPI qui fait foi ici : il est machine-readable, versionné avec   │
-│ les endpoints, et c'est LUI que le fournisseur publie comme contrat. La      │
-│ divergence est inscrite dans docs/UNVERIFIED-FIELDS.md — un relevé contre    │
-│ une vraie instance la tranchera.                                             │
+│ The OpenAPI is authoritative here: it's machine-readable, versioned with    │
+│ the endpoints, and it's the one the provider publishes as the contract.     │
+│ The divergence is logged in docs/UNVERIFIED-FIELDS.md — a probe against a   │
+│ real instance will settle it.                                                │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-Deux exceptions de forme, attestées elles aussi :
+Two shape exceptions, also attested:
 
-  • **429** : le corps n'est PAS du JSON. C'est du texte brut,
-    `Rate limit exceeded. Please retry in X seconds.` (doc « Rate Limiting in
-    API v2 »). Un consommateur qui fait `response.json()` sur un 429 casse —
-    c'est exactement le genre de piège qu'un mock doit poser.
-  • **400** : l'OpenAPI déclare un `anyOf` de six formes. La plus simple
-    (`{error, status}`) est celle qu'on émet ; les cinq autres décrivent des
-    erreurs de validation de corps, donc des écritures — hors périmètre.
+  • **429**: the body is NOT JSON. It's plain text,
+    `Rate limit exceeded. Please retry in X seconds.` ("Rate Limiting in
+    API v2" doc). A consumer that calls `response.json()` on a 429 breaks —
+    exactly the kind of trap a mock should set.
+  • **400**: the OpenAPI declares an `anyOf` of six shapes. The simplest one
+    (`{error, status}`) is the one emitted; the other five describe body
+    validation errors, i.e. writes — out of scope.
 """
 
 from __future__ import annotations
@@ -34,23 +34,23 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-#: Les messages exacts donnés en `example` par l'OpenAPI officiel. Centralisés
-#: ici pour qu'une campagne de sondes contre une vraie instance les corrige en
-#: un seul diff.
+#: The exact messages given as `example` by the official OpenAPI. Centralized
+#: here so a probing campaign against a real instance can fix them in a
+#: single diff.
 MESSAGE_401 = "The access token is invalid"
 MESSAGE_404 = "Not Found"
 
 
-def erreur(
+def error(
     status_code: int,
     message: str,
     *,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
-    """L'enveloppe d'erreur Pennylane : `{"error", "status"}`, rien d'autre.
+    """The Pennylane error envelope: `{"error", "status"}`, nothing else.
 
-    `additionalProperties: false` dans l'OpenAPI — ajouter une clé « utile »
-    (un `code`, un `request_id`) ferait mentir le contrat.
+    `additionalProperties: false` in the OpenAPI — adding a "useful" key
+    (a `code`, a `request_id`) would make the contract lie.
     """
     return JSONResponse(
         status_code=status_code,
@@ -59,23 +59,24 @@ def erreur(
     )
 
 
-def erreur_scope(scope: str) -> JSONResponse:
-    """Le 403 de scope manquant, au mot près (`example` de l'OpenAPI)."""
-    return erreur(403, f'Access to this resource requires scope "{scope}".')
+def scope_error(scope: str) -> JSONResponse:
+    """The missing-scope 403, word for word (the OpenAPI's `example`)."""
+    return error(403, f'Access to this resource requires scope "{scope}".')
 
 
-def erreur_jeton() -> JSONResponse:
-    """401 — jeton absent, invalide ou expiré. Les trois cas sont indistincts
-    chez le fournisseur : un seul message, aucun indice sur LEQUEL des trois."""
-    return erreur(401, MESSAGE_401)
+def token_error() -> JSONResponse:
+    """401 — token missing, invalid or expired. The three cases are
+    indistinguishable at the provider: a single message, no hint as to which
+    of the three."""
+    return error(401, MESSAGE_401)
 
 
-def erreur_introuvable() -> JSONResponse:
-    return erreur(404, MESSAGE_404)
+def not_found_error() -> JSONResponse:
+    return error(404, MESSAGE_404)
 
 
-def erreur_debit(retry_after: int, headers: dict[str, str]) -> PlainTextResponse:
-    """429 — corps en TEXTE BRUT, pas en JSON. Cf. l'encadré du module."""
+def rate_limit_error(retry_after: int, headers: dict[str, str]) -> PlainTextResponse:
+    """429 — PLAIN TEXT body, not JSON. See the module's callout above."""
     return PlainTextResponse(
         status_code=429,
         content=f"Rate limit exceeded. Please retry in {retry_after} seconds.",
@@ -83,48 +84,48 @@ def erreur_debit(retry_after: int, headers: dict[str, str]) -> PlainTextResponse
     )
 
 
-def entetes_debit(limite: int, restant: int, reset: int) -> dict[str, str]:
-    """Les en-têtes `ratelimit-*`, présents sur TOUTE réponse — pas seulement
-    sur les 429. C'est ce qui permet à un consommateur de se réguler avant de
-    se faire limiter, et un client qui ne les lit pas doit pouvoir être pris en
-    défaut ici plutôt qu'en production."""
+def rate_limit_headers(limit: int, remaining: int, reset: int) -> dict[str, str]:
+    """The `ratelimit-*` headers, present on EVERY response — not just on
+    429s. This is what lets a consumer throttle itself before getting rate
+    limited, and a client that doesn't read them should be caught out here
+    rather than in production."""
     return {
-        "ratelimit-limit": str(limite),
-        "ratelimit-remaining": str(max(0, restant)),
+        "ratelimit-limit": str(limit),
+        "ratelimit-remaining": str(max(0, remaining)),
         "ratelimit-reset": str(reset),
     }
 
 
-def detail_route_inconnue(request: Request) -> JSONResponse:
-    """Une route inexistante rend l'enveloppe Pennylane, pas le 404 de FastAPI."""
-    del request  # le fournisseur ne renvoie aucun écho du chemin demandé
-    return erreur_introuvable()
+def unknown_route_detail(request: Request) -> JSONResponse:
+    """An unknown route renders the Pennylane envelope, not FastAPI's 404."""
+    del request  # the provider never echoes back the requested path
+    return not_found_error()
 
 
-#: Réutilisé sur chaque route (`responses=REPONSES_ERREUR`) : c'est ce qui fait
-#: passer le contrat généré de « liste de chemins » à contrat véritable.
-REPONSES_ERREUR: dict[int | str, dict[str, Any]] = {
+#: Reused on every route (`responses=ERROR_RESPONSES`): this is what turns the
+#: generated contract from a "list of paths" into an actual contract.
+ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {
         "description": (
-            "Paramètre invalide — `limit` hors bornes, `cursor` illisible, "
-            "`filter` mal formé, ou `start_date` et `cursor` envoyés ensemble."
+            "Invalid parameter — `limit` out of bounds, unreadable `cursor`, "
+            "malformed `filter`, or `start_date` and `cursor` sent together."
         )
     },
-    401: {"description": "Jeton absent, invalide ou expiré. N'est PAS retentable."},
+    401: {"description": "Token missing, invalid or expired. NOT retryable."},
     403: {
         "description": (
-            "Le jeton est valide mais ne porte pas le scope requis. "
-            "N'est PAS retentable : il faut regénérer un jeton."
+            "The token is valid but does not carry the required scope. "
+            "NOT retryable: a new token must be regenerated."
         )
     },
-    404: {"description": "Ressource inconnue, ou appartenant à une autre société."},
-    422: {"description": "Règle métier violée (écriture déséquilibrée, TVA incohérente…)."},
+    404: {"description": "Unknown resource, or belonging to another company."},
+    422: {"description": "Business rule violated (unbalanced entry, inconsistent VAT…)."},
     429: {
         "description": (
-            "Limite de débit atteinte (25 requêtes / 5 s au jeton). "
-            "**Corps en texte brut, pas en JSON.** En-tête `retry-after` fourni."
+            "Rate limit reached (25 requests / 5 s per token). "
+            "**Plain text body, not JSON.** `retry-after` header provided."
         )
     },
-    500: {"description": "Panne injectée."},
-    503: {"description": "Panne transitoire injectée."},
+    500: {"description": "Injected failure."},
+    503: {"description": "Injected transient failure."},
 }

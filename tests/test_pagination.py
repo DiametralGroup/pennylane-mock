@@ -1,8 +1,8 @@
-"""Le curseur — le cinquième dialecte de pagination de l'écosystème insights360.
+"""The cursor — the fifth pagination dialect in the insights360 ecosystem.
 
-BoondManager pagine par `page`/`maxResults`, Graph par `@odata.nextLink`,
-LinkedIn par `start`/`count`, GA4 par `limit`/`offset`. Un connecteur qui
-aurait « une » boucle générique se casse ici, et c'est le but.
+BoondManager paginates by `page`/`maxResults`, Graph by `@odata.nextLink`,
+LinkedIn by `start`/`count`, GA4 by `limit`/`offset`. A connector with "one"
+generic loop breaks here, and that's the point.
 """
 
 from __future__ import annotations
@@ -11,16 +11,16 @@ import pytest
 from conftest import BASE, H, tout_paginer
 
 
-def test_le_parcours_complet_ne_perd_ni_ne_double_aucune_ligne(client):
+def test_full_walk_neither_loses_nor_duplicates_any_line(client):
     tout = tout_paginer(client, f"{BASE}/customer_invoices", limite=7)
     identifiants = [element["id"] for element in tout]
-    assert len(identifiants) == len(set(identifiants)), "doublons entre deux pages"
+    assert len(identifiants) == len(set(identifiants)), "duplicates between two pages"
     reference = client.get(f"{BASE}/customer_invoices?limit=100", headers=H).json()
     assert reference["has_more"] is False
     assert sorted(identifiants) == sorted(e["id"] for e in reference["items"])
 
 
-def test_la_derniere_page_annonce_has_more_faux_et_next_cursor_nul(client):
+def test_last_page_announces_has_more_false_and_next_cursor_null(client):
     curseur, corps = None, None
     for _ in range(100):
         url = f"{BASE}/journals?limit=2" + (f"&cursor={curseur}" if curseur else "")
@@ -33,40 +33,40 @@ def test_la_derniere_page_annonce_has_more_faux_et_next_cursor_nul(client):
 
 
 @pytest.mark.parametrize("valeur", ["0", "-1", "101", "9999", "abc", "2.5"])
-def test_limit_hors_bornes_rend_400_et_n_est_pas_rabote(client, valeur):
-    """Un plafond silencieux fait croire à un pipeline qu'il a demandé 5000
-    lignes et tout reçu, alors qu'il en a lu 100. C'est le défaut le plus
-    coûteux d'une pagination, parce qu'il ne se voit nulle part."""
+def test_limit_out_of_bounds_renders_400_and_is_not_clamped(client, valeur):
+    """A silent cap makes a pipeline believe it asked for 5000 lines and got
+    them all, when it actually read 100. This is pagination's costliest
+    defect, because it's invisible anywhere."""
     reponse = client.get(f"{BASE}/customers?limit={valeur}", headers=H)
     assert reponse.status_code == 400
     assert reponse.json()["status"] == 400
     assert "1 and 100" in reponse.json()["error"]
 
 
-def test_le_plafond_des_changelogs_est_plus_haut(client):
-    """1000 sur les changelogs, 100 sur les listes ordinaires — l'OpenAPI le
-    déclare bien ainsi, endpoint par endpoint."""
+def test_changelog_limit_ceiling_is_higher(client):
+    """1000 on changelogs, 100 on ordinary lists — the OpenAPI spec declares
+    it this way, endpoint by endpoint."""
     assert client.get(f"{BASE}/changelogs/customers?limit=1000", headers=H).status_code == 200
     assert client.get(f"{BASE}/changelogs/customers?limit=1001", headers=H).status_code == 400
     assert client.get(f"{BASE}/customers?limit=1000", headers=H).status_code == 400
 
 
-def test_la_limite_par_defaut_est_vingt(client):
+def test_default_limit_is_twenty(client):
     corps = client.get(f"{BASE}/customer_invoices", headers=H).json()
     assert len(corps["items"]) == 20
 
 
 @pytest.mark.parametrize("curseur", ["%%%", "pas-du-base64!", "eyJ0cnVuY2F0", "bnVsbA"])
-def test_un_curseur_illisible_rend_400(client, curseur):
+def test_an_unreadable_cursor_renders_400(client, curseur):
     reponse = client.get(f"{BASE}/customers?cursor={curseur}", headers=H)
     assert reponse.status_code == 400
     assert reponse.json()["status"] == 400
 
 
-def test_le_tri_par_defaut_est_decroissant(client):
-    """`-id` par défaut : c'est l'inverse de l'intuition, et c'est ce que
-    l'OpenAPI déclare. Un consommateur qui suppose l'ordre croissant pose son
-    point de reprise sur le plus RÉCENT et ne revoit plus rien."""
+def test_default_sort_is_descending(client):
+    """`-id` by default: it's the opposite of intuition, and it's what the
+    OpenAPI spec declares. A consumer who assumes ascending order sets their
+    resume point on the most RECENT record and never sees anything again."""
     par_defaut = client.get(f"{BASE}/customer_invoices?limit=5", headers=H).json()["items"]
     explicite = client.get(f"{BASE}/customer_invoices?limit=5&sort=id", headers=H).json()["items"]
     decroissant = [e["id"] for e in par_defaut]
@@ -76,22 +76,22 @@ def test_le_tri_par_defaut_est_decroissant(client):
     assert decroissant != croissant
 
 
-def test_le_tri_sur_un_autre_champ(client):
+def test_sort_on_another_field(client):
     items = client.get(f"{BASE}/customer_invoices?limit=10&sort=date", headers=H).json()["items"]
     dates = [e["date"] for e in items]
     assert dates == sorted(dates)
 
 
-def test_le_curseur_n_encode_pas_les_filtres(client):
-    """LE piège du dialecte, documenté noir sur blanc par le fournisseur :
-    « Omitting the filters on page 2+ will return unfiltered results from the
-    cursor position. » Pas de 400, pas d'avertissement — des lignes en trop,
-    silencieusement. Un pipeline qui oublie de rejouer son `filter` charge des
-    lignes qu'il croyait avoir exclues."""
-    # Un filtre dont les lignes retenues sont ESPACÉES : c'est la seule façon
-    # de rendre le piège visible — avec un filtre qui sélectionne un bloc
-    # contigu, la page 2 non filtrée tomberait par hasard sur des lignes
-    # conformes, et le test passerait sans rien prouver.
+def test_cursor_does_not_encode_filters(client):
+    """THE dialect's trap, documented in black and white by the provider:
+    "Omitting the filters on page 2+ will return unfiltered results from the
+    cursor position." No 400, no warning — extra lines, silently. A pipeline
+    that forgets to replay its `filter` loads lines it thought it had
+    excluded."""
+    # A filter whose retained lines are SPREAD OUT: it's the only way to make
+    # the trap visible — with a filter that selects a contiguous block, the
+    # unfiltered page 2 would randomly land on compliant lines, and the test
+    # would pass without proving anything.
     retenus = [1, 5, 9, 13]
     filtre = '[{"field":"id","operator":"in","value":[1,5,9,13]}]'
     page1 = client.get(
@@ -100,17 +100,17 @@ def test_le_curseur_n_encode_pas_les_filtres(client):
     assert [e["id"] for e in page1["items"]] == [1, 5]
     assert page1["has_more"]
 
-    # Page 2 SANS rejouer le filtre : le fournisseur ne proteste pas.
+    # Page 2 WITHOUT replaying the filter: the provider doesn't complain.
     sans = client.get(
         f"{BASE}/customer_invoices?limit=2&sort=id&cursor={page1['next_cursor']}", headers=H
     )
     assert sans.status_code == 200
     assert any(e["id"] not in retenus for e in sans.json()["items"]), (
-        "le mock doit REPRODUIRE le piège : sans le filtre, la page 2 rend des "
-        "lignes non filtrées, sans erreur"
+        "the mock must REPRODUCE the trap: without the filter, page 2 renders "
+        "unfiltered lines, with no error"
     )
 
-    # Page 2 AVEC le filtre rejoué : le comportement correct.
+    # Page 2 WITH the filter replayed: the correct behavior.
     avec = client.get(
         f"{BASE}/customer_invoices?limit=2&sort=id&filter={filtre}&cursor={page1['next_cursor']}",
         headers=H,
@@ -118,7 +118,7 @@ def test_le_curseur_n_encode_pas_les_filtres(client):
     assert [e["id"] for e in avec["items"]] == [9, 13]
 
 
-def test_les_filtres_se_cumulent_en_et(client):
+def test_filters_stack_with_and(client):
     filtre = (
         '[{"field":"paid","operator":"eq","value":true},'
         '{"field":"date","operator":"gteq","value":"2026-04-01"}]'
@@ -130,15 +130,15 @@ def test_les_filtres_se_cumulent_en_et(client):
     assert all(e["paid"] and e["date"] >= "2026-04-01" for e in items)
 
 
-def test_l_operateur_in_prend_un_tableau(client):
-    """C'est le pattern que le fournisseur recommande pour recharger les
-    ressources d'un lot de changements : `id in [...]`."""
+def test_the_in_operator_takes_an_array(client):
+    """This is the pattern the provider recommends for reloading the
+    resources of a batch of changes: `id in [...]`."""
     filtre = '[{"field":"id","operator":"in","value":[1,2,3]}]'
     items = client.get(f"{BASE}/customer_invoices?filter={filtre}", headers=H).json()["items"]
     assert sorted(e["id"] for e in items) == [1, 2, 3]
 
 
-def test_start_with_est_insensible_a_la_casse(client):
+def test_start_with_is_case_insensitive(client):
     filtre = '[{"field":"number","operator":"start_with","value":"411"}]'
     items = client.get(f"{BASE}/ledger_accounts?limit=100&filter={filtre}", headers=H).json()[
         "items"
@@ -146,9 +146,9 @@ def test_start_with_est_insensible_a_la_casse(client):
     assert items and all(e["number"].startswith("411") for e in items)
 
 
-def test_un_operateur_inconnu_rend_400(client):
-    """La liste des neuf est courte et stable : un opérateur inventé côté
-    consommateur est un vrai bug, et il doit se voir."""
+def test_an_unknown_operator_renders_400(client):
+    """The list of nine is short and stable: an operator invented on the
+    consumer side is a real bug, and it must show up."""
     filtre = '[{"field":"id","operator":"like","value":1}]'
     reponse = client.get(f"{BASE}/customer_invoices?filter={filtre}", headers=H)
     assert reponse.status_code == 400
@@ -156,20 +156,20 @@ def test_un_operateur_inconnu_rend_400(client):
 
 
 @pytest.mark.parametrize("brut", ["pas-du-json", '{"field":"id"}', '[{"field":"id"}]'])
-def test_un_filtre_mal_forme_rend_400(client, brut):
+def test_a_malformed_filter_renders_400(client, brut):
     assert client.get(f"{BASE}/customers?filter={brut}", headers=H).status_code == 400
 
 
-# ── L'enveloppe n'est pas uniforme, et l'OpenAPI ne le dit pas ───────────────
+# ── The envelope is not uniform, and the OpenAPI spec doesn't say so ────────
 
-#: Les quatre collections dont l'enveloppe porte AUSSI une pagination par
-#: offset, observées contre une instance réelle le 2026-09-04 par
+#: The four collections whose envelope ALSO carries offset pagination,
+#: observed against a real instance on 2026-09-04 via
 #: `scripts/compare_real.py`.
 AVEC_OFFSET = ("journals", "ledger_accounts", "ledger_entries", "fiscal_years")
 
-#: Un échantillon de celles qui ne la portent PAS — dont
-#: `ledger_entry_lines`, de la même famille comptable que trois des quatre
-#: ci-dessus. C'est ce voisinage qui interdit de deviner une règle.
+#: A sample of the ones that do NOT carry it — including `ledger_entry_lines`,
+#: from the same accounting family as three of the four above. This
+#: proximity is exactly what rules out guessing a rule.
 SANS_OFFSET = ("ledger_entry_lines", "customers", "suppliers", "transactions", "products")
 
 CLES_OFFSET = {"current_page", "per_page", "total_items", "total_pages"}
@@ -177,54 +177,58 @@ CLES_CURSEUR = {"items", "has_more", "next_cursor"}
 
 
 @pytest.mark.parametrize("collection", AVEC_OFFSET)
-def test_ces_quatre_collections_rendent_AUSSI_l_offset_mais_VIDE(client, collection):
-    """Le mock affirmait « exactement trois clés » sur la foi de l'OpenAPI.
+def test_these_four_collections_also_render_offset_but_EMPTY(client, collection):
+    """The mock used to claim "exactly three keys" on the strength of the
+    OpenAPI spec.
 
-    Confronté à une instance réelle, c'est faux deux fois : ces quatre-là
-    ajoutent `current_page`, `per_page`, `total_items` et `total_pages` — et
-    les quatre valent `null`. Présentes et vides.
+    Checked against a real instance, that's wrong twice over: these four add
+    `current_page`, `per_page`, `total_items` and `total_pages` — and all
+    four are `null`. Present and empty.
 
-    C'est le piège à reproduire : un consommateur qui teste leur PRÉSENCE pour
-    choisir son mode de pagination les trouve, bascule sur l'offset, et lit
-    `null` partout — sans une erreur. Les CALCULER, comme le faisait la
-    première version de ce correctif, serait plus utile et donc plus faux : un
-    mock qui rend un total là où le fournisseur rend `null` valide du code qui
-    casse en production.
+    This is the trap to reproduce: a consumer who tests their PRESENCE to
+    choose their pagination mode finds them, switches to offset, and reads
+    `null` everywhere — with no error. COMPUTING them, as the first version
+    of this fix did, would be more useful and therefore more wrong: a mock
+    that renders a total where the provider renders `null` validates code
+    that breaks in production.
     """
     corps = client.get(f"{BASE}/{collection}?limit=2", headers=H).json()
-    assert set(corps) >= CLES_CURSEUR, "le curseur reste la voie sûre, partout"
-    assert set(corps) >= CLES_OFFSET, f"{collection} doit porter les clés d'offset"
+    assert set(corps) >= CLES_CURSEUR, "the cursor remains the safe path, everywhere"
+    assert set(corps) >= CLES_OFFSET, f"{collection} must carry the offset keys"
     assert all(corps[cle] is None for cle in CLES_OFFSET), (
-        f"{collection} : les clés d'offset doivent être NULLES — le fournisseur "
-        "ne les remplit pas sous pagination par curseur."
+        f"{collection}: the offset keys must be NULL — the provider doesn't "
+        "fill them under cursor pagination."
     )
 
 
 @pytest.mark.parametrize("collection", SANS_OFFSET)
-def test_les_autres_ne_la_rendent_PAS(client, collection):
-    """L'asymétrie est le fait à reproduire, pas un détail à lisser.
+def test_the_others_do_NOT_render_it(client, collection):
+    """The asymmetry is the fact to reproduce, not a detail to smooth over.
 
-    `ledger_entry_lines` est de la même famille comptable que `ledger_entries`
-    et n'a pas l'offset. Il n'y a donc aucune règle à deviner — seulement une
-    observation. Servir l'offset partout serait aussi faux que nulle part, et
-    inventerait un troisième dialecte qui n'existe chez personne.
+    `ledger_entry_lines` is from the same accounting family as
+    `ledger_entries` and has no offset. So there is no rule to guess — only
+    an observation. Serving the offset everywhere would be just as wrong as
+    nowhere, and would invent a third dialect that exists nowhere.
     """
     corps = client.get(f"{BASE}/{collection}?limit=2", headers=H).json()
-    assert set(corps) == CLES_CURSEUR, f"{collection} ne doit rendre que le curseur"
+    assert set(corps) == CLES_CURSEUR, f"{collection} must render only the cursor"
 
 
-def test_l_offset_reste_nul_meme_en_avancant(client):
-    """Inerte veut dire inerte : rien ne se remplit à la page suivante.
+def test_offset_stays_null_even_when_paging_forward(client):
+    """Inert means inert: nothing gets filled in on the next page.
 
-    Ce test disait l'inverse tant que le mock calculait les valeurs. Il vaut
-    d'être gardé retourné : c'est la trace de l'erreur, et la garantie qu'on ne
-    la refera pas en trouvant les `null` « inutiles ».
+    This test used to say the opposite as long as the mock computed the
+    values. It's worth keeping in its reverted form: it's the trace of the
+    mistake, and the guarantee that it won't be redone by finding the
+    `null`s "useless".
     """
     premiere = client.get(f"{BASE}/ledger_entries?limit=1", headers=H).json()
     if not premiere["has_more"]:
-        pytest.skip("jeu de données trop court pour une seconde page")
+        pytest.skip("dataset too short for a second page")
     suivante = client.get(
         f"{BASE}/ledger_entries?limit=1&cursor={premiere['next_cursor']}", headers=H
     ).json()
     assert all(suivante[cle] is None for cle in CLES_OFFSET)
-    assert suivante["next_cursor"] != premiere["next_cursor"], "le curseur, lui, avance"
+    assert suivante["next_cursor"] != premiere["next_cursor"], (
+        "the cursor, on the other hand, advances"
+    )

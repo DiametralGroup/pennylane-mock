@@ -1,10 +1,10 @@
-"""État mutable du serveur.
+"""Mutable server state.
 
-`state.dataset` est le monde ; `state.reset(seed=…)` le reconstruit ;
-`state.avancer_evolution()` le fait vivre. S'y ajoute un index (type, id) →
-entité, invalidé à chaque mutation — sans lui, chaque `GET /{id}` reparcourrait
-la collection entière, ce qui se voit dès que le grand livre passe le millier
-de lignes.
+`state.dataset` is the world; `state.reset(seed=…)` rebuilds it;
+`state.advance_evolution()` makes it live. Alongside that, an index
+(type, id) → entity, invalidated on every mutation — without it, every
+`GET /{id}` would walk the entire collection, which becomes visible as soon
+as the ledger passes a thousand rows.
 """
 
 from __future__ import annotations
@@ -19,14 +19,14 @@ from .settings import settings
 
 
 def build_dataset(seed: int = 42) -> dict[str, Any]:
-    """Construit le monde comptable « Boréal Conseil »."""
+    """Builds the "Boréal Conseil" accounting world."""
     from .dataset.realiste import build_realiste_dataset
 
     return build_realiste_dataset(seed)
 
 
 class MockState:
-    """État serveur mutable, pour simuler des changements distants et des pannes."""
+    """Mutable server state, used to simulate remote changes and failures."""
 
     def __init__(self) -> None:
         self.dataset: dict[str, Any] = {}
@@ -36,22 +36,22 @@ class MockState:
         self.reset()
 
     def reset(self, seed: int | None = None) -> None:
-        """Reconstruit le jeu de données et remet TOUT à la ligne de base.
+        """Rebuilds the dataset and resets EVERYTHING to the baseline.
 
-        ⚠️ « La ligne de base » est celle DÉCLARÉE PAR L'ENVIRONNEMENT, pas un
-        état vide. Trois choses en dépendent, et chacune a sa raison :
+        WARNING: "the baseline" is the one DECLARED BY THE ENVIRONMENT, not
+        an empty state. Three things depend on this, each for its own
+        reason:
 
-          • **la configuration** est relue (`settings.reload()`). Sans elle, un
-            test qui a retiré un scope par `/__admin/scopes` le retire pour
-            TOUS les suivants : le plan de contrôle mute un objet global, et
-            reconstruire le jeu de données ne le rétablit pas. La panne est
-            silencieuse et se manifeste des tests plus loin, sur un 403 qui n'a
-            rien à voir avec ce qu'on croyait tester ;
-          • **les règles d'injection** sont remises à la baseline de
-            l'environnement. Si un `reset` les vidait, la première requête
-            d'une suite effacerait une limite de débit configurée au niveau du
-            compose ;
-          • **l'évolution** est RÉARMÉE : la chronologie repart de zéro.
+          • **configuration** is reread (`settings.reload()`). Without it, a
+            test that removed a scope via `/__admin/scopes` would remove it
+            for ALL the following ones: the control plane mutates a global
+            object, and rebuilding the dataset doesn't restore it. The
+            failure is silent and shows up tests later, on a 403 that has
+            nothing to do with what was being tested;
+          • **injection rules** are reset to the environment's baseline. If
+            a `reset` cleared them, the first request of a suite would wipe
+            out a rate limit configured at the compose level;
+          • **evolution** is REARMED: the timeline starts over from zero.
         """
         settings.reload()
         self.seed = settings.seed if seed is None else seed
@@ -59,30 +59,30 @@ class MockState:
         engine.clear()
         engine.reset_counters()
         self.evolution = Evolution(self.seed, time.time())
-        self.invalider_caches()
-        _appliquer_injections_de_base()
+        self.invalidate_caches()
+        _apply_base_injections()
 
-    # ── Caches dérivés ───────────────────────────────────────────────────────
+    # ── Derived caches ───────────────────────────────────────────────────────
 
-    def invalider_caches(self) -> None:
-        """À appeler après TOUTE mutation du dataset (admin, évolution)."""
+    def invalidate_caches(self) -> None:
+        """Call after ANY mutation of the dataset (admin, evolution)."""
         self._index = None
 
-    def avancer_evolution(self, maintenant: float) -> None:
-        """Fait avancer la vie de l'entreprise ; invalide les caches si elle a bougé."""
-        if self.evolution.avancer(self.dataset, maintenant):
-            self.invalider_caches()
+    def advance_evolution(self, now: float) -> None:
+        """Advances the company's life; invalidates caches if it moved."""
+        if self.evolution.advance(self.dataset, now):
+            self.invalidate_caches()
 
     def index(self) -> dict[tuple[str, int], dict[str, Any]]:
-        """(collection, id) → élément, sur toutes les listes servies."""
+        """(collection, id) → element, across all served lists."""
         if self._index is None:
             index: dict[tuple[str, int], dict[str, Any]] = {}
-            for cle, elements in self.dataset.items():
+            for key, elements in self.dataset.items():
                 if not isinstance(elements, list):
                     continue
                 for element in elements:
                     if isinstance(element, dict) and isinstance(element.get("id"), int):
-                        index[(cle, element["id"])] = element
+                        index[(key, element["id"])] = element
             self._index = index
         return self._index
 
@@ -90,18 +90,18 @@ class MockState:
         return {k: len(v) for k, v in self.dataset.items() if isinstance(v, list)}
 
 
-def _appliquer_injections_de_base() -> None:
-    """Règles d'injection déclarées par l'environnement, réappliquées à chaque reset.
+def _apply_base_injections() -> None:
+    """Injection rules declared by the environment, reapplied on every reset.
 
-    Permet à un docker-compose ou à un sidecar CI de faire tourner le mock en
-    permanence dégradé (limite de débit basse, par exemple) sans qu'un test ne
-    l'annule par inadvertance.
+    Lets a docker-compose or a CI sidecar keep the mock permanently degraded
+    (a low rate limit, for instance) without a test accidentally cancelling
+    it.
     """
-    if (seuil := os.environ.get("PENNYLANE_MOCK_RATE_LIMIT_AFTER")) is not None:
+    if (threshold := os.environ.get("PENNYLANE_MOCK_RATE_LIMIT_AFTER")) is not None:
         engine.add(
             kind="rate_limit",
             scope="/api/external/v2/*",
-            after_requests=int(seuil),
+            after_requests=int(threshold),
             retry_after_seconds=int(os.environ.get("PENNYLANE_MOCK_RETRY_AFTER", "1")),
         )
 

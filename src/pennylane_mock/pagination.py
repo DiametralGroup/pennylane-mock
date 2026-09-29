@@ -1,44 +1,44 @@
-"""Pagination par curseur — le cinquième dialecte de pagination de l'écosystème.
+"""Cursor pagination — the ecosystem's fifth pagination dialect.
 
     {"items": [...], "has_more": true, "next_cursor": "eyJhZnRlciI6IDEwMH0"}
 
-À comparer aux quatre autres mocks : `page`/`maxResults` chez BoondManager,
-`@odata.nextLink` chez Graph, `start`/`count` Rest.li chez LinkedIn,
-`limit`/`offset` chez GA4. Un connecteur qui aurait « une » boucle de
-pagination générique se casse ici, et c'est le but.
+Compare with the other four mocks: `page`/`maxResults` at BoondManager,
+`@odata.nextLink` at Graph, `start`/`count` Rest.li at LinkedIn,
+`limit`/`offset` at GA4. A connector that has "one" generic pagination loop
+breaks here, and that's the point.
 
-┌─ TROIS PIÈGES REPRODUITS EXPRÈS ────────────────────────────────────────────┐
-│ 1. LE CURSEUR N'ENCODE PAS LES FILTRES. La documentation est explicite :     │
-│    « Omitting the filters on page 2+ will return unfiltered results from     │
-│    the cursor position. » Donc PAS de 400, PAS d'avertissement — des lignes  │
-│    en trop, silencieusement. Un pipeline qui oublie de rejouer son `filter`  │
-│    charge des lignes qu'il croyait avoir exclues. Reproduit tel quel.        │
+┌─ THREE TRAPS REPRODUCED ON PURPOSE ─────────────────────────────────────────┐
+│ 1. THE CURSOR DOES NOT ENCODE FILTERS. The documentation is explicit:        │
+│    "Omitting the filters on page 2+ will return unfiltered results from     │
+│    the cursor position." So NO 400, NO warning — just extra rows,           │
+│    silently. A pipeline that forgets to replay its `filter` loads rows it   │
+│    thought it had excluded. Reproduced as-is.                               │
 │                                                                              │
-│ 2. `limit` HORS BORNES REND 400, il n'est pas raboté. 1..100 sur les listes  │
-│    ordinaires, 1..1000 sur les changelogs — deux plafonds, déclarés ainsi    │
-│    endpoint par endpoint dans l'OpenAPI officiel.                            │
+│ 2. `limit` OUT OF BOUNDS RENDERS 400, it isn't clamped. 1..100 on ordinary   │
+│    lists, 1..1000 on changelogs — two ceilings, declared this way endpoint   │
+│    by endpoint in the official OpenAPI.                                     │
 │                                                                              │
-│ 3. `next_cursor` est `null` — pas absent, pas "" — quand `has_more` est      │
-│    faux. `additionalProperties: false` : les trois clés, toujours, et rien   │
-│    d'autre.                                                                  │
+│ 3. `next_cursor` is `null` — not absent, not "" — when `has_more` is        │
+│    false. `additionalProperties: false`: the three keys, always, and        │
+│    nothing else.                                                            │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-┌─ CE QUE LE CURSEUR EST VRAIMENT ────────────────────────────────────────────┐
-│ La documentation du fournisseur donne TROIS encodages incompatibles :        │
-│   • le guide de pagination         : `eyJpZCI6MTAwfQ==`  → {"id":100}        │
-│   • l'exemple de /bank_accounts    : `dXBkYXRlZF9hdDoxNjc0MTIzNDU2`          │
+┌─ WHAT THE CURSOR REALLY IS ─────────────────────────────────────────────────┐
+│ The provider's documentation gives THREE incompatible encodings:            │
+│   • the pagination guide            : `eyJpZCI6MTAwfQ==`  → {"id":100}      │
+│   • the /bank_accounts example      : `dXBkYXRlZF9hdDoxNjc0MTIzNDU2`        │
 │                                                    → updated_at:1674123456   │
-│   • l'exemple des changelogs       : `MjAyNS0wMS0wOVQwODoyNDozOC44MTI0NTha`  │
+│   • the changelogs example          : `MjAyNS0wMS0wOVQwODoyNDozOC44MTI0NTha`│
 │                                                    → 2025-01-09T08:24:38…Z   │
 │                                                                              │
-│ Trois formes, un seul point commun : c'est du base64. La conclusion qui      │
-│ s'impose est celle que la doc énonce elle-même — « the cursor is an opaque   │
-│ string » — et un consommateur qui le décode s'adosse à un détail             │
-│ d'implémentation qui a déjà changé trois fois.                               │
+│ Three forms, one common point: it's base64. The conclusion follows from     │
+│ what the doc itself states — "the cursor is an opaque string" — and a       │
+│ consumer that decodes it leans on an implementation detail that has         │
+│ already changed three times.                                                │
 │                                                                              │
-│ Le mock émet donc du base64url de JSON, la forme du guide de pagination,     │
-│ et l'inscrit dans docs/UNVERIFIED-FIELDS.md. Il ne SIGNE pas le curseur :    │
-│ ce serait inventer une sévérité que le fournisseur n'a pas.                  │
+│ The mock therefore emits base64url of JSON, the pagination guide's form,    │
+│ and logs it in docs/UNVERIFIED-FIELDS.md. It does NOT sign the cursor:      │
+│ that would invent a strictness the provider doesn't have.                   │
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
@@ -52,109 +52,111 @@ from typing import Any
 from .settings import settings
 
 
-class CurseurInvalide(ValueError):
-    """Curseur illisible → 400, comme chez le fournisseur."""
+class InvalidCursor(ValueError):
+    """Unreadable cursor → 400, as with the provider."""
 
 
-class LimiteInvalide(ValueError):
-    """`limit` hors bornes → 400. Le message porte les bornes réelles."""
+class InvalidLimit(ValueError):
+    """`limit` out of bounds → 400. The message carries the real bounds."""
 
 
-def encoder_curseur(charge: dict[str, Any]) -> str:
-    """base64url SANS padding — le `=` final est un caractère à échapper en
-    query string, et les exemples du fournisseur en portent tantôt, tantôt pas."""
-    brut = json.dumps(charge, separators=(",", ":"), sort_keys=True).encode()
-    return base64.urlsafe_b64encode(brut).rstrip(b"=").decode()
+def encode_cursor(payload: dict[str, Any]) -> str:
+    """base64url WITHOUT padding — the trailing `=` is a character that must
+    be escaped in a query string, and the provider's examples sometimes
+    carry it, sometimes don't."""
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
-def decoder_curseur(curseur: str) -> dict[str, Any]:
+def decode_cursor(cursor: str) -> dict[str, Any]:
     try:
-        brut = base64.urlsafe_b64decode(curseur + "=" * (-len(curseur) % 4))
-        charge = json.loads(brut)
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+        payload = json.loads(raw)
     except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
-        raise CurseurInvalide("Invalid cursor") from exc
-    if not isinstance(charge, dict):
-        raise CurseurInvalide("Invalid cursor")
-    return charge
+        raise InvalidCursor("Invalid cursor") from exc
+    if not isinstance(payload, dict):
+        raise InvalidCursor("Invalid cursor")
+    return payload
 
 
-def limite_demandee(brut: str | None, *, maximum: int | None = None) -> int:
-    """Valide `limit` et rend la valeur effective.
+def requested_limit(raw: str | None, *, maximum: int | None = None) -> int:
+    """Validates `limit` and returns the effective value.
 
-    Le fournisseur REFUSE une valeur hors bornes au lieu de la raboter. On
-    reproduit ce refus, y compris pour une valeur non entière — un `limit=abc`
-    silencieusement ramené à 20 rendrait un test vert sur un client cassé.
+    The provider REFUSES an out-of-bounds value instead of clamping it. We
+    reproduce that refusal, including for a non-integer value — a
+    `limit=abc` silently brought back to 20 would make a broken client's
+    test pass.
     """
-    plafond = settings.limite_max if maximum is None else maximum
-    if brut is None or brut == "":
-        return settings.limite_defaut
+    cap = settings.max_limit if maximum is None else maximum
+    if raw is None or raw == "":
+        return settings.default_limit
     try:
-        valeur = int(brut)
+        value = int(raw)
     except ValueError as exc:
-        raise LimiteInvalide(f"limit must be an integer between 1 and {plafond}") from exc
-    if valeur < 1 or valeur > plafond:
-        raise LimiteInvalide(f"limit must be between 1 and {plafond}")
-    return valeur
+        raise InvalidLimit(f"limit must be an integer between 1 and {cap}") from exc
+    if value < 1 or value > cap:
+        raise InvalidLimit(f"limit must be between 1 and {cap}")
+    return value
 
 
-def paginer(
+def paginate(
     elements: list[dict[str, Any]],
     *,
-    curseur: str | None,
-    limite: int,
-    cle: str = "id",
+    cursor: str | None,
+    limit: int,
+    key: str = "id",
     offset: bool = False,
 ) -> dict[str, Any]:
-    """Découpe une liste DÉJÀ triée et filtrée en une page du dialecte.
+    """Slices an ALREADY sorted and filtered list into one page of the dialect.
 
-    Le curseur porte le rang du dernier élément servi (`after`) ET la valeur de
-    sa clé (`key`). Le rang seul suffirait pour paginer, mais il ferait dériver
-    la page si le jeu de données bouge entre deux appels ; la clé permet de
-    retrouver la position exacte, et de retomber sur le rang quand l'élément a
-    disparu (supprimé entre-temps). C'est le comportement d'un curseur réel :
-    stable sur des données qui vivent.
+    The cursor carries the rank of the last element served (`after`) AND the
+    value of its key (`key`). Rank alone would be enough to paginate, but it
+    would make the page drift if the dataset changes between two calls; the
+    key allows the exact position to be found again, and falls back to the
+    rank when the element has disappeared (deleted in the meantime). This is
+    the behavior of a real cursor: stable over data that lives.
     """
-    depart = 0
-    if curseur:
-        charge = decoder_curseur(curseur)
-        valeur = charge.get("key")
-        depart = int(charge.get("after", 0))
-        if valeur is not None:
-            positions = [i for i, e in enumerate(elements) if e.get(cle) == valeur]
+    start = 0
+    if cursor:
+        payload = decode_cursor(cursor)
+        value = payload.get("key")
+        start = int(payload.get("after", 0))
+        if value is not None:
+            positions = [i for i, e in enumerate(elements) if e.get(key) == value]
             if positions:
-                depart = positions[0] + 1
+                start = positions[0] + 1
 
-    page = elements[depart : depart + limite]
-    reste = depart + len(page) < len(elements)
-    suivant: str | None = None
-    if reste and page:
-        suivant = encoder_curseur({"after": depart + len(page), "key": page[-1].get(cle)})
-    corps: dict[str, Any] = {"items": page, "has_more": reste, "next_cursor": suivant}
+    page = elements[start : start + limit]
+    has_more = start + len(page) < len(elements)
+    next_cursor: str | None = None
+    if has_more and page:
+        next_cursor = encode_cursor({"after": start + len(page), "key": page[-1].get(key)})
+    body: dict[str, Any] = {"items": page, "has_more": has_more, "next_cursor": next_cursor}
     if offset:
-        # ┌─ QUATRE CLÉS EN PLUS, INERTES, SUR QUATRE COLLECTIONS SEULEMENT ───┐
-        # │ Observé le 2026-09-04 contre une instance réelle : `journals`,     │
-        # │ `ledger_accounts`, `ledger_entries` et `fiscal_years` rendent une  │
-        # │ pagination par OFFSET à côté du curseur. Pas `ledger_entry_lines`, │
-        # │ pourtant de la même famille — aucune règle à deviner, seulement    │
-        # │ une observation à reproduire.                                      │
+        # ┌─ FOUR EXTRA, INERT KEYS, ON JUST FOUR COLLECTIONS ─────────────────┐
+        # │ Observed on 2026-09-04 against a real instance: `journals`,       │
+        # │ `ledger_accounts`, `ledger_entries` and `fiscal_years` render an  │
+        # │ OFFSET pagination alongside the cursor. Not `ledger_entry_lines`, │
+        # │ although it's in the same family — no rule to guess, only an     │
+        # │ observation to reproduce.                                         │
         # │                                                                     │
-        # │ Et le piège est là : les quatre clés valent `null`. Elles sont      │
-        # │ PRÉSENTES et VIDES. Un consommateur qui testerait leur présence     │
-        # │ pour choisir son mode de pagination les trouverait, basculerait sur │
-        # │ l'offset, et lirait `null` partout — sans une erreur.               │
+        # │ And here's the trap: the four keys are `null`. They are PRESENT   │
+        # │ and EMPTY. A consumer that tests their presence to choose its     │
+        # │ pagination mode finds them, switches to offset, and reads `null`   │
+        # │ everywhere — without an error.                                     │
         # │                                                                     │
-        # │ La première version de ce correctif les CALCULAIT, ce qui était     │
-        # │ plus utile et donc plus faux : un mock qui rend un total là où le   │
-        # │ fournisseur rend `null` valide du code qui casse en production.     │
-        # │ `scripts/compare_real.py` l'a dit au premier passage.               │
+        # │ The first version of this fix COMPUTED them, which was more       │
+        # │ useful and therefore more wrong: a mock that returns a total       │
+        # │ where the provider returns `null` validates code that breaks in   │
+        # │ production. `scripts/compare_real.py` said so on the first pass.  │
         # │                                                                     │
-        # │ Non observé, donc non reproduit : ce que rendent ces clés si l'on   │
-        # │ pagine par `page`/`per_page`. Le mock n'accepte pas ces paramètres, │
-        # │ et l'inventer serait un troisième dialecte. Cf.                     │
-        # │ docs/UNVERIFIED-FIELDS.md.                                          │
+        # │ Not observed, therefore not reproduced: what these keys return if  │
+        # │ paginating by `page`/`per_page`. The mock does not accept these    │
+        # │ parameters, and inventing it would be a third dialect. Cf.         │
+        # │ docs/UNVERIFIED-FIELDS.md.                                         │
         # └─────────────────────────────────────────────────────────────────────┘
-        corps["current_page"] = None
-        corps["per_page"] = None
-        corps["total_items"] = None
-        corps["total_pages"] = None
-    return corps
+        body["current_page"] = None
+        body["per_page"] = None
+        body["total_items"] = None
+        body["total_pages"] = None
+    return body

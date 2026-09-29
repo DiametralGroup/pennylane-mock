@@ -1,41 +1,41 @@
-"""Le jeu de données : la comptabilité de « Boréal Conseil » dans Pennylane.
+"""The dataset: the accounting of "Boréal Conseil" in Pennylane.
 
-Même monde que les quatre autres mocks de l'écosystème insights360 — ESN
-française de 34 personnes, trois agences, domaine `boreal-conseil.example`,
-ancre au 15 juillet 2026, graine 42 — vu cette fois par le SYSTÈME COMPTABLE.
-Les mêmes flux que ceux de `boondmanager-mock` y apparaissent sous leur forme
-Pennylane : sociétés clientes → factures de vente → encaissements bancaires,
-achats → factures fournisseurs → décaissements, et l'écriture double qui les
-enregistre tous.
+Same world as the four other mocks in the insights360 ecosystem — a French
+IT consultancy (ESN) of 34 people, three agencies, domain
+`boreal-conseil.example`, anchored on 15 July 2026, seed 42 — seen this time
+through the ACCOUNTING SYSTEM. The same flows as in `boondmanager-mock`
+appear here in their Pennylane form: client companies → sales invoices →
+bank receipts, purchases → supplier invoices → disbursements, and the
+double entry that records all of it.
 
-┌─ CE QUI EST PARTAGÉ AVEC boondmanager-mock, ET CE QUI NE L'EST PAS ─────────┐
-│ PARTAGÉ (dupliqué ici, sans dépendance de paquet — aucun des cinq mocks ne  │
-│ dépend d'un autre, cf. README) :                                            │
-│   • les raisons sociales des dix clients et des trois fournisseurs ;        │
-│   • l'ancre temporelle (15/07/2026), la graine (42), le taux de TVA (20 %) ;│
-│   • le format des références de vente `FAC-2026-NNNN` / `AV-2026-NNNN`.     │
+┌─ WHAT IS SHARED WITH boondmanager-mock, AND WHAT IS NOT ────────────────────┐
+│ SHARED (duplicated here, with no package dependency — none of the five      │
+│ mocks depends on another, see README):                                      │
+│   • the company names of the ten clients and three suppliers;               │
+│   • the time anchor (15/07/2026), the seed (42), the VAT rate (20%);        │
+│   • the format of sales references `FAC-2026-NNNN` / `AV-2026-NNNN`.        │
 │                                                                             │
-│ PAS PARTAGÉ, et il faut le dire clairement : les MONTANTS. Les reproduire   │
-│ à l'euro près demanderait de rejouer ici la matrice jours x TJM des         │
-│ missions BoondManager — ~1500 lignes de logique métier dupliquée, qui       │
-│ divergeraient au premier changement d'un des deux dépôts. Les montants de   │
-│ ce mock sont donc les SIENS, tirés de la même graine et du même ordre de    │
-│ grandeur. Un test aval qui compare des CA entre les deux mocks compare      │
-│ donc des ENSEMBLES DE CLIENTS et des séries de références, pas des euros.   │
+│ NOT SHARED, and it needs saying clearly: the AMOUNTS. Reproducing them      │
+│ to the cent would mean replaying here the days x daily-rate matrix of       │
+│ BoondManager missions — ~1500 lines of duplicated business logic, which     │
+│ would diverge the moment either repo changes. This mock's amounts are       │
+│ therefore its OWN, drawn from the same seed and the same order of           │
+│ magnitude. A downstream test comparing revenue between the two mocks        │
+│ is therefore comparing SETS OF CLIENTS and series of references, not euros. │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-┌─ L'INVARIANT CENTRAL : LA BALANCE ÉQUILIBRE ────────────────────────────────┐
-│ Tout est construit à partir des ÉCRITURES. Une facture de vente n'est pas   │
-│ un montant posé à côté d'une écriture plausible : l'écriture EST la source, │
-│ et la facture en dérive. Les montants sont manipulés en CENTIMES ENTIERS —  │
-│ jamais en flottants — puis formatés en chaîne à deux décimales, qui est le  │
-│ dialecte v2. C'est ce qui garantit que `sum(debit) == sum(credit)` à        │
-│ l'octet près, et `tests/test_coherence.py` le vérifie.                      │
+┌─ THE CENTRAL INVARIANT: THE BALANCE BALANCES ───────────────────────────────┐
+│ Everything is built from the LEDGER ENTRIES. A sales invoice is not an      │
+│ amount set beside a plausible entry: the entry IS the source, and the       │
+│ invoice derives from it. Amounts are handled as WHOLE CENTS — never as      │
+│ floats — then formatted as a two-decimal string, which is the v2 dialect.   │
+│ This guarantees `sum(debit) == sum(credit)` down to the byte, and           │
+│ `tests/test_coherence.py` checks it.                                        │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-Déterminisme : `random.Random(seed)` et une ancre temporelle FIXE. Jamais
-`datetime.now()` — deux exécutions produisent le même jeu de données au même
-octet, c'est ce qui rend les tests aval reproductibles.
+Determinism: `random.Random(seed)` and a FIXED time anchor. Never
+`datetime.now()` — two runs produce the same dataset down to the same
+byte, which is what makes downstream tests reproducible.
 """
 
 from __future__ import annotations
@@ -47,18 +47,18 @@ from typing import Any
 
 from ..settings import settings
 
-# ── Ancre temporelle ─────────────────────────────────────────────────────────
+# ── Time anchor ──────────────────────────────────────────────────────────────
 
-#: Identique à celle de boondmanager-mock, linkedin-mock et ga-mock.
+#: Same as boondmanager-mock, linkedin-mock and ga-mock.
 AUJOURDHUI = date(2026, 7, 15)
-#: Plafond de tous les `updated_at` du jeu de BASE. Les événements d'évolution
-#: sont STRICTEMENT postérieurs : un curseur incrémental posé ici doit rendre
-#: zéro ligne tant que le monde n'a pas bougé.
+#: Ceiling for all `updated_at` in the BASE dataset. Evolution events are
+#: STRICTLY later: an incremental cursor placed here must return zero rows
+#: as long as the world hasn't moved.
 DERNIERE_MAJ = date(2026, 7, 12)
-#: Premier mois facturé de l'exercice courant.
+#: First invoiced month of the current fiscal year.
 DEBUT_FACTURATION = date(2026, 1, 1)
 
-TVA = 20  # en pourcentage entier — les centimes se calculent sans flottant
+TVA = 20  # whole percentage — cents are computed without floats
 TAUX_TVA = "FR_200"
 DEVISE = "EUR"
 PAYS = "FR"
@@ -66,7 +66,7 @@ PAYS = "FR"
 BASE_URL = "https://app.pennylane.com/api/external/v2"
 
 
-# ── Utilitaires de forme ─────────────────────────────────────────────────────
+# ── Shape utilities ──────────────────────────────────────────────────────────
 
 
 def _d(jour: date) -> str:
@@ -74,18 +74,18 @@ def _d(jour: date) -> str:
 
 
 def _dt(jour: date, h: int = 9, mn: int = 0, s: int = 0, micro: int = 0) -> str:
-    """`2026-08-30T10:08:08.146343Z` — le format du fournisseur.
+    """`2026-08-30T10:08:08.146343Z` — the vendor's format.
 
-    UTC avec un `Z` final et SIX chiffres de microsecondes, jamais un décalage
-    `+02:00` : c'est ce que montrent tous les exemples de l'OpenAPI. Un
-    consommateur qui parse en `datetime.fromisoformat` avant Python 3.11 casse
-    sur le `Z` — raison de plus pour ne pas « simplifier » en `+00:00`.
+    UTC with a trailing `Z` and SIX digits of microseconds, never a `+02:00`
+    offset: that's what every OpenAPI example shows. A consumer that parses
+    with `datetime.fromisoformat` before Python 3.11 breaks on the `Z` — one
+    more reason not to "simplify" it into `+00:00`.
     """
     return f"{jour:%Y-%m-%d}T{h:02d}:{mn:02d}:{s:02d}.{micro:06d}Z"
 
 
 def _maj(rng: random.Random, apres: date) -> str:
-    """Un `updated_at` plausible : postérieur à la création, jamais après l'ancre."""
+    """A plausible `updated_at`: after creation, never after the anchor."""
     if apres >= DERNIERE_MAJ:
         jour = DERNIERE_MAJ
     else:
@@ -96,12 +96,12 @@ def _maj(rng: random.Random, apres: date) -> str:
 
 
 def _euros(centimes: int) -> str:
-    """Centimes entiers → la chaîne du dialecte v2.
+    """Whole cents → the v2 dialect string.
 
-    Les montants de l'API v2 sont des CHAÎNES (`"230.32"`), jamais des nombres.
-    Le guide d'erreurs va jusqu'à lister « amounts not sent as strings » comme
-    cause typique de 400. Un connecteur qui reçoit un flottant ici et le
-    tolère se cassera en production, quand la vraie API lui enverra la chaîne.
+    Amounts in the v2 API are STRINGS (`"230.32"`), never numbers.
+    The error guide even lists "amounts not sent as strings" as a typical
+    cause of 400s. A connector that receives a float here and tolerates it
+    will break in production, when the real API sends the string.
     """
     signe = "-" if centimes < 0 else ""
     a = abs(centimes)
@@ -113,18 +113,19 @@ def _fin_mois(annee: int, mois: int) -> date:
 
 
 def _jours_ouvres(annee: int, mois: int) -> int:
-    """Jours ouvrés du mois (hors week-ends ; les fériés sont ignorés — mock)."""
+    """Business days in the month (weekends excluded; public holidays are
+    ignored — mock)."""
     dernier = calendar.monthrange(annee, mois)[1]
     return sum(1 for j in range(1, dernier + 1) if date(annee, mois, j).weekday() < 5)
 
 
 def _lien(chemin: str) -> dict[str, str]:
-    """Une collection imbriquée est un LIEN, pas un tableau.
+    """A nested collection is a LINK, not an array.
 
-    C'est la différence de forme la plus structurante entre v1 et v2 (guide de
-    migration) : `{"invoice_lines": {"url": "…"}}` et non `{"invoice_lines":
-    [...]}`. Un consommateur qui itère dessus doit faire un second appel, et
-    c'est précisément le comportement qu'un mock doit lui imposer.
+    This is the most structural shape difference between v1 and v2 (migration
+    guide): `{"invoice_lines": {"url": "…"}}` and not `{"invoice_lines":
+    [...]}`. A consumer that iterates over it must make a second call, and that
+    is exactly the behavior a mock must force on it.
     """
     return {"url": f"{BASE_URL}{chemin}"}
 
@@ -133,9 +134,9 @@ def _ref(ident: int, chemin: str) -> dict[str, Any]:
     return {"id": ident, "url": f"{BASE_URL}{chemin}/{ident}"}
 
 
-# ── Catalogues — les mêmes raisons sociales que boondmanager-mock ────────────
+# ── Catalogs — the same company names as boondmanager-mock ───────────────────
 
-#: (raison sociale, ville, code postal, adresse, secteur, prospect ?)
+#: (company name, city, postal code, address, sector, prospect?)
 _CLIENTS: tuple[tuple[str, str, str, str, str, bool], ...] = (
     ("Lumina Retail", "Paris", "75009", "14 rue de Châteaudun", "Retail & Distribution", False),
     ("Banque Hexagone", "Paris", "75002", "3 place de la Bourse", "Banque & Assurance", False),
@@ -146,13 +147,13 @@ _CLIENTS: tuple[tuple[str, str, str, str, str, bool], ...] = (
     ("Citymob", "Bordeaux", "33000", "9 cours de l'Intendance", "Transport", False),
     ("Assurial", "Bruxelles", "1000", "60 rue Royale", "Banque & Assurance", False),
     ("Groupe Ardentes", "Nantes", "44200", "5 boulevard Vincent Gâche", "Industrie", False),
-    # Prospect chez BoondManager : il existe en tant que client Pennylane
-    # (une fiche a été créée) mais ne porte AUCUNE facture. C'est un cas
-    # limite délibéré — un client à zéro euro doit apparaître dans les listes.
+    # Prospect at BoondManager: it exists as a Pennylane client (a record
+    # was created) but carries NO invoice. This is a deliberate edge case —
+    # a zero-euro client must still show up in listings.
     ("MediaQuartz", "Paris", "75011", "22 rue Oberkampf", "Télécoms & Médias", True),
 )
 
-#: (raison sociale, ville, code postal, adresse, compte de charge, libellé d'achat)
+#: (company name, city, postal code, address, expense account, purchase label)
 _FOURNISSEURS: tuple[tuple[str, str, str, str, str, str], ...] = (
     ("Fivetech Partners", "Paris", "75008", "31 rue de Ponthieu", "604000", "Sous-traitance"),
     ("Softalliance", "Paris", "75010", "8 rue des Petites Écuries", "651600", "Licences"),
@@ -161,31 +162,31 @@ _FOURNISSEURS: tuple[tuple[str, str, str, str, str, str], ...] = (
     ("Bureau & Cie", "Nantes", "44100", "17 rue de la Convention", "606300", "Fournitures"),
 )
 
-#: Deux clients PARTICULIERS — la surface `customers` est un `oneOf` entre
-#: personne morale et personne physique, et un connecteur qui ne traite que la
-#: première casse sur la seconde. Ils achètent de la formation (compte 706100).
+#: Two INDIVIDUAL clients — the `customers` surface is a `oneOf` between
+#: a legal entity and a private individual, and a connector that only handles
+#: the first breaks on the second. They buy training (account 706100).
 _PARTICULIERS: tuple[tuple[str, str, str, str, str], ...] = (
     ("Camille", "Rousset", "Paris", "75012", "8 rue Crozatier"),
     ("Yanis", "Belkacem", "Lyon", "69006", "3 rue Duquesne"),
 )
 
-#: Le plan comptable servi : (numéro, libellé, type, lettrable, taux de TVA).
-#: Réduit à ce que la vie de l'entreprise met réellement en mouvement — un
-#: PCG complet ferait 400 comptes dont 390 à zéro, ce qui n'éprouve rien.
-#: ┌─ `vat_rate` EST UN CODE, PAS UN POURCENTAGE ───────────────────────────────┐
-#: │ Le mock servait « 0.0 » et « 20.0 ». Le fournisseur sert un CODE de taux,  │
-#: │ relevé sur un locataire réel le 2026-09-07 : `any` (2 633 comptes),        │
+#: The chart of accounts served: (number, label, type, letterable, VAT rate).
+#: Reduced to what the business actually moves — a full PCG would have 400
+#: accounts with 390 sitting at zero, which tests nothing.
+#: ┌─ `vat_rate` IS A CODE, NOT A PERCENTAGE ───────────────────────────────────┐
+#: │ The mock used to serve "0.0" and "20.0". The vendor serves a rate CODE,    │
+#: │ recorded from a real tenant on 2026-09-07: `any` (2,633 accounts),         │
 #: │ `FR_200` (166), `exempt` (141), `extracom` (51), `crossborder` (40),       │
-#: │ `FR_100` (19), `FR_55` (17), et jusqu'à `FR_15_385`.                       │
+#: │ `FR_100` (19), `FR_55` (17), and up to `FR_15_385`.                        │
 #: │                                                                             │
-#: │ La différence n'est pas cosmétique : un consommateur qui castait la valeur │
-#: │ en numérique passait sur le mock et tombait en production sur le premier   │
-#: │ `any` — « invalid input syntax for type numeric ». Et `any` est de loin la │
-#: │ valeur la plus répandue, donc l'échec était certain, pas probable.         │
+#: │ The difference isn't cosmetic: a consumer that cast the value to           │
+#: │ numeric worked fine on the mock and broke in production on the first       │
+#: │ `any` — "invalid input syntax for type numeric". And `any` is by far       │
+#: │ the most common value, so the failure was certain, not probable.           │
 #: │                                                                             │
-#: │ `any` est ici le défaut, comme chez le fournisseur : un compte qui         │
-#: │ n'impose aucun taux particulier. `exempt` sur les services bancaires n'est │
-#: │ pas décoratif — ils sont exonérés de TVA.                                   │
+#: │ `any` is the default here, just like at the vendor's: an account that      │
+#: │ doesn't impose any particular rate. `exempt` on banking services           │
+#: │ isn't decorative — they're VAT exempt.                                      │
 #: └─────────────────────────────────────────────────────────────────────────────┘
 _PLAN: tuple[tuple[str, str, str, bool, str], ...] = (
     ("101000", "Capital social", "equity", False, "any"),
@@ -209,7 +210,7 @@ _PLAN: tuple[tuple[str, str, str, bool, str], ...] = (
     ("706100", "Formations", "income", False, "exempt"),
 )
 
-#: (code, libellé) — les journaux d'une petite ESN.
+#: (code, label) — the journals of a small ESN.
 _JOURNAUX: tuple[tuple[str, str, str], ...] = (
     ("VE", "Journal des ventes", "sale"),
     ("AC", "Journal des achats", "purchase"),
@@ -219,8 +220,8 @@ _JOURNAUX: tuple[tuple[str, str, str], ...] = (
     ("SA", "Journal de paie", "payroll"),
 )
 
-#: Les axes analytiques : l'agence et le pôle, exactement les deux axes de
-#: cloisonnement d'insights360. Un groupe de catégories par axe.
+#: The analytical axes: agency and practice, exactly insights360's two
+#: partitioning axes. One category group per axis.
 _AXES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("Agence", (("Paris", "AG-PAR"), ("Lyon", "AG-LYO"), ("Nantes", "AG-NAN"))),
     (
@@ -233,7 +234,7 @@ _AXES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ),
 )
 
-#: (libellé de la prestation, TJM en centimes)
+#: (service label, daily rate in cents)
 _PRESTATIONS: tuple[tuple[str, int], ...] = (
     ("Ingénierie data — consultant confirmé", 68_000),
     ("Ingénierie data — consultant senior", 78_000),
@@ -244,7 +245,7 @@ _PRESTATIONS: tuple[tuple[str, int], ...] = (
     ("Formation Power BI (jour)", 145_000),
 )
 
-#: Établissements bancaires — deux comptes, comme chez BoondManager.
+#: Banking establishments — two accounts, same as BoondManager.
 _BANQUES: tuple[tuple[str, str, str], ...] = (
     ("Banque Hexagone Entreprises", "Compte courant", "512000"),
     ("Banque Hexagone Entreprises", "Compte de réserve", "512100"),
@@ -252,25 +253,25 @@ _BANQUES: tuple[tuple[str, str, str], ...] = (
 
 
 def _aux(prefixe: str, nom: str) -> str:
-    """Le numéro d'un compte auxiliaire : `411LUMIN`, `401FIVET`.
+    """The number of a subsidiary account: `411LUMIN`, `401FIVET`.
 
-    Forme française classique — racine générale + cinq lettres du tiers. Le
-    fournisseur ne documente PAS de règle de composition (chaque cabinet a la
-    sienne) ; celle-ci est plausible, pas attestée. Cf. docs/UNVERIFIED-FIELDS.md.
+    Classic French shape — general root + five letters of the third party.
+    The vendor does NOT document a composition rule (every firm has its
+    own); this one is plausible, not attested. See docs/UNVERIFIED-FIELDS.md.
     """
     lettres = "".join(c for c in nom.upper() if c.isalpha())[:5].ljust(5, "X")
     return f"{prefixe}{lettres}"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Référentiels — journaux, plan comptable, exercices, axes analytiques
+#  Reference data — journals, chart of accounts, fiscal years, analytical axes
 # ═════════════════════════════════════════════════════════════════════════════
 
 
 def _journaux() -> list[dict[str, Any]]:
-    """Six journaux. `type` n'a PAS d'énumération dans l'OpenAPI officiel : les
-    valeurs ci-dessous sont plausibles (nomenclature française usuelle), pas
-    attestées — cf. docs/UNVERIFIED-FIELDS.md."""
+    """Six journals. `type` has NO enum in the official OpenAPI: the values
+    below are plausible (usual French nomenclature), not attested — see
+    docs/UNVERIFIED-FIELDS.md."""
     return [
         {"id": i, "code": code, "label": libelle, "type": type_}
         for i, (code, libelle, type_) in enumerate(_JOURNAUX, start=1)
@@ -278,11 +279,11 @@ def _journaux() -> list[dict[str, Any]]:
 
 
 def _comptes(rng: random.Random) -> list[dict[str, Any]]:
-    """Le plan général, puis un auxiliaire par client et par fournisseur.
+    """The general chart, then one subsidiary account per client and per supplier.
 
-    Les auxiliaires portent le MÊME `type` que leur racine (`customer`,
-    `supplier`) : c'est ce qui permet à un consommateur de les regrouper sans
-    connaître la règle de numérotation française.
+    Subsidiary accounts carry the SAME `type` as their root (`customer`,
+    `supplier`): this is what lets a consumer group them without knowing
+    the French numbering rule.
     """
     comptes: list[dict[str, Any]] = []
     ident = 1
@@ -319,7 +320,7 @@ def _comptes(rng: random.Random) -> list[dict[str, Any]]:
             _compte_auxiliaire(ident, _aux("401", nom), f"Fournisseur — {nom}", "supplier")
         )
         ident += 1
-    del rng  # le plan comptable n'a aucune part d'aléa : il est décidé, pas tiré
+    del rng  # the chart of accounts has no randomness at all: it's decided, not drawn
     return comptes
 
 
@@ -328,8 +329,8 @@ def _compte_auxiliaire(ident: int, numero: str, libelle: str, type_: str) -> dic
         "id": ident,
         "number": numero,
         "label": libelle,
-        # `any` — c'est la valeur du fournisseur sur l'écrasante majorité des
-        # comptes, auxiliaires compris : un compte de tiers n'impose pas de taux.
+        # `any` — this is the vendor's value on the overwhelming majority of
+        # accounts, subsidiary accounts included: a third-party account doesn't impose a rate.
         "vat_rate": "any",
         "country_alpha2": PAYS,
         "enabled": True,
@@ -341,11 +342,11 @@ def _compte_auxiliaire(ident: int, numero: str, libelle: str, type_: str) -> dic
 
 
 def _exercices() -> list[dict[str, Any]]:
-    """Trois exercices : deux clos, celui de l'ancre ouvert.
+    """Three fiscal years: two closed, the one holding the anchor open.
 
-    Un exercice CLOS et un exercice OUVERT dans le même jeu : c'est ce qui
-    permet d'éprouver un consommateur qui extrait « l'exercice courant » sans
-    dire lequel — il doit choisir, et le choix doit se voir.
+    A CLOSED fiscal year and an OPEN one in the same dataset: this is what
+    lets you test a consumer that extracts "the current fiscal year" without
+    saying which one — it has to choose, and the choice has to show.
     """
     exercices = []
     for i, annee in enumerate((2024, 2025, 2026), start=1):
@@ -366,10 +367,10 @@ def _exercices() -> list[dict[str, Any]]:
 
 
 def _axes_analytiques() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Deux groupes (Agence, Pôle) et leurs catégories.
+    """Two groups (Agency, Practice) and their categories.
 
-    C'est l'axe de cloisonnement d'insights360 : une catégorie Pennylane
-    « Agence / Lyon » doit se raccrocher au périmètre `agence` des marts.
+    This is insights360's partitioning axis: a Pennylane category
+    "Agency / Lyon" must hook onto the `agence` perimeter of the marts.
     """
     groupes: list[dict[str, Any]] = []
     categories: list[dict[str, Any]] = []
@@ -414,19 +415,19 @@ def _etablissements_bancaires() -> list[dict[str, Any]]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Tiers — clients (personnes morales ET physiques) et fournisseurs
+#  Third parties — clients (legal entities AND individuals) and suppliers
 # ═════════════════════════════════════════════════════════════════════════════
 
 
 def _clients(comptes: list[dict[str, Any]], rng: random.Random) -> list[dict[str, Any]]:
-    """Dix personnes morales, puis deux personnes physiques.
+    """Ten legal entities, then two private individuals.
 
-    Le `oneOf` de l'OpenAPI n'a que DEUX variantes, distinguées par
-    `customer_type` — et elles n'ont pas les mêmes champs : la personne morale
-    porte `name`, `reg_no`, `vat_number` ; la personne physique porte
-    `first_name`/`last_name` et AUCUN des trois autres. Un consommateur qui lit
-    `reg_no` sans regarder `customer_type` reçoit un KeyError sur la onzième
-    ligne, jamais sur la première.
+    The OpenAPI's `oneOf` has only TWO variants, distinguished by
+    `customer_type` — and they don't share the same fields: the legal entity
+    carries `name`, `reg_no`, `vat_number`; the individual carries
+    `first_name`/`last_name` and NONE of the other three. A consumer that reads
+    `reg_no` without checking `customer_type` gets a KeyError on the eleventh
+    row, never on the first.
     """
     par_numero = {c["number"]: c for c in comptes}
     clients: list[dict[str, Any]] = []
@@ -449,10 +450,10 @@ def _clients(comptes: list[dict[str, Any]], rng: random.Random) -> list[dict[str
                 "customer_type": "company",
                 "name": nom,
                 "billing_iban": None,
-                # Le délai de paiement : 30 jours par défaut, 45 fin de mois
-                # pour les grands comptes. C'est ce qui fait diverger
-                # `deadline` de `date + 30`, et un consommateur qui recalcule
-                # l'échéance au lieu de la lire se trompe sur ceux-là.
+                # The payment term: 30 days by default, 45 days end of month
+                # for the big accounts. This is what makes `deadline` diverge
+                # from `date + 30`, and a consumer that recomputes the due
+                # date instead of reading it gets those wrong.
                 "payment_conditions": "45_days_end_of_month" if ident % 4 == 0 else "30_days",
                 "recipient": "Service comptabilité fournisseurs",
                 "phone": f"+331{rng.randint(10_000_000, 99_999_999)}",
@@ -509,11 +510,11 @@ def _clients(comptes: list[dict[str, Any]], rng: random.Random) -> list[dict[str
 
 
 def _contacts(clients: list[dict[str, Any]], rng: random.Random) -> dict[int, list[dict[str, Any]]]:
-    """Les contacts d'un client, servis sur `/customers/{id}/contacts`.
+    """A client's contacts, served on `/customers/{id}/contacts`.
 
-    ⚠️ MINIMISATION : ces enregistrements portent de l'identité. Le mock les
-    sert parce que le fournisseur les sert — mais le connecteur d'insights360
-    ne doit en extraire qu'une liste blanche de champs. Cf. la note du README.
+    ⚠️ MINIMIZATION: these records carry personal identity. The mock serves
+    them because the vendor serves them — but insights360's connector must
+    only extract a whitelist of fields from them. See the note in the README.
     """
     fonctions = ("Directeur administratif et financier", "Comptable", "Responsable achats")
     prenoms = ("Sofia", "Hugo", "Amara", "Louis", "Priya", "Arthur", "Emma", "Mateo")
@@ -583,10 +584,10 @@ def _fournisseurs(comptes: list[dict[str, Any]], rng: random.Random) -> list[dic
 
 
 def _produits(rng: random.Random, comptes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Le catalogue de prestations — le TJM par profil.
+    """The service catalog — the daily rate per profile.
 
-    `price_before_tax` et `price` sont des chaînes, comme tous les montants.
-    Le second EST le TTC : il ne se recalcule pas, il se lit.
+    `price_before_tax` and `price` are strings, like all amounts.
+    The second one IS the tax-included price: it isn't recomputed, it's read.
     """
     vente = next(c for c in comptes if c["number"] == "706000")
     formation = next(c for c in comptes if c["number"] == "706100")
@@ -631,10 +632,10 @@ def _comptes_bancaires(
                 "id": ident,
                 "name": libelle,
                 "currency": DEVISE,
-                # Le solde est RECALCULÉ à la fin de la construction, une fois
-                # toutes les écritures posées : il doit être le solde du compte
-                # 512 correspondant, sinon la banque et la comptabilité se
-                # contredisent dans le même jeu de données.
+                # The balance is RECOMPUTED at the end of construction, once
+                # all entries are posted: it must match the corresponding
+                # 512 account's balance, or the bank and the accounting
+                # contradict each other in the same dataset.
                 "balance": "0.00",
                 "bank_establishment": {"id": etab["id"]},
                 "journal": _ref(banque["id"], "/journals"),
@@ -647,18 +648,18 @@ def _comptes_bancaires(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Le grand livre — la SOURCE, dont tout le reste dérive
+#  The general ledger — the SOURCE, from which everything else derives
 # ═════════════════════════════════════════════════════════════════════════════
 
 
 class Grand:
-    """Accumulateur d'écritures. Une écriture non équilibrée est un bug, pas
-    une donnée : `passer()` le vérifie et lève.
+    """Entry accumulator. An unbalanced entry is a bug, not a piece of
+    data: `passer()` checks it and raises.
 
-    Les montants circulent en CENTIMES ENTIERS. C'est la seule façon d'avoir
-    `sum(debit) == sum(credit)` exactement — avec des flottants, la balance
-    d'un jeu de 3000 lignes finit par afficher un écart de deux centimes que
-    personne n'arrive à expliquer.
+    Amounts flow as WHOLE CENTS. It's the only way to get
+    `sum(debit) == sum(credit)` exactly — with floats, the balance of a
+    3000-line dataset ends up showing a two-cent gap that nobody can
+    explain.
     """
 
     def __init__(self, journaux: list[dict[str, Any]], comptes: list[dict[str, Any]]) -> None:
@@ -686,11 +687,11 @@ class Grand:
         categories: list[dict[str, Any]] | None = None,
         maj: str | None = None,
     ) -> dict[str, Any]:
-        """Passe une écriture. `mouvements` : (compte, centimes signés, libellé).
+        """Posts an entry. `mouvements`: (account, signed cents, label).
 
-        Un montant POSITIF est un DÉBIT, un montant NÉGATIF un CRÉDIT. Une
-        seule convention de signe dans tout le module : deux conventions, et
-        la moitié des écritures finit à l'envers sans que rien ne le dise.
+        A POSITIVE amount is a DEBIT, a NEGATIVE amount a CREDIT. A single
+        sign convention across the whole module: two conventions, and half
+        the entries end up reversed with nothing to show it.
         """
         total = sum(montant for _, montant, _ in mouvements)
         if total != 0:
@@ -751,13 +752,13 @@ class Grand:
         return ecriture
 
     def lettrer(self, ecriture_a: int, ecriture_b: int, numero: str) -> None:
-        """Lettre les lignes de tiers de deux écritures — facture ↔ règlement.
+        """Reconciles the third-party lines of two entries — invoice ↔ payment.
 
-        Le lettrage est ce qui distingue une créance soldée d'une créance
-        ouverte, donc ce qui fait le `remaining_amount` d'une facture. Un mock
-        qui l'omettrait servirait un `outstanding_balance` toujours nul.
+        Reconciliation is what distinguishes a settled receivable from an
+        open one, so it's what drives an invoice's `remaining_amount`. A mock
+        that skipped it would serve an `outstanding_balance` that's always zero.
         """
-        del numero  # le fournisseur n'expose pas le code de lettrage en v2
+        del numero  # the vendor doesn't expose the reconciliation code in v2
         cotes = [
             ligne
             for ligne in self.lignes
@@ -772,11 +773,11 @@ class Grand:
 
 
 def _categorie(categories: list[dict[str, Any]], libelle_partiel: str) -> list[dict[str, Any]]:
-    """La ventilation analytique d'une écriture : une catégorie à poids 1.
+    """The analytical split of an entry: one category at weight 1.
 
-    `weight` est une CHAÎNE (`"1.0"`), comme tous les nombres du dialecte, et
-    la somme des poids d'une ligne vaut 1 — c'est ce qui permet de ventiler un
-    même montant sur deux axes sans le compter deux fois.
+    `weight` is a STRING (`"1.0"`), like every number in the dialect, and
+    the sum of a line's weights equals 1 — this is what lets you split the
+    same amount across two axes without counting it twice.
     """
     trouvee = next(c for c in categories if libelle_partiel in c["label"])
     return [
@@ -793,11 +794,11 @@ def _categorie(categories: list[dict[str, Any]], libelle_partiel: str) -> list[d
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Les ventes — factures clients, lignes, règlements
+#  Sales — client invoices, lines, payments
 # ═════════════════════════════════════════════════════════════════════════════
 
-#: Agence de rattachement de chaque client, par identifiant. Reprend celle de
-#: boondmanager-mock (Lyon → agence 2, Nantes → 3, le reste → Paris).
+#: Home agency of each client, by id. Reuses the one from boondmanager-mock
+#: (Lyon → agency 2, Nantes → 3, the rest → Paris).
 _AGENCE_DU_CLIENT = {
     1: "Paris",
     2: "Paris",
@@ -833,20 +834,20 @@ def _statut_facture(mois: int, brouillon: bool, regle: bool) -> str:
         return "draft"
     if regle:
         return "paid"
-    # Une facture de juin, émise début juillet, échéance à 30 jours : elle n'est
-    # pas encore en retard le 15 juillet. `upcoming` et non `late` — la
-    # distinction porte tout un tableau de bord de recouvrement.
+    # A June invoice, issued in early July, due in 30 days: it isn't late
+    # yet on 15 July. `upcoming` and not `late` — the distinction drives
+    # an entire collections dashboard.
     del mois
     return "upcoming"
 
 
 def _echeance(emission: date, conditions: str) -> date:
-    """`deadline` selon les conditions de paiement du client.
+    """`deadline` per the client's payment conditions.
 
-    Le fournisseur SERT l'échéance ; il ne demande pas de la recalculer. Elle
-    est reproduite ici pour que les deux valeurs soient cohérentes — mais un
-    consommateur doit LIRE `deadline`, pas le déduire de `date`, sinon il se
-    trompe sur les clients en « fin de mois ».
+    The vendor SERVES the due date; it doesn't ask you to recompute it. It's
+    reproduced here so the two values stay consistent — but a consumer must
+    READ `deadline`, not derive it from `date`, or it gets the "end of
+    month" clients wrong.
     """
     if conditions == "upon_receipt":
         return emission
@@ -856,23 +857,23 @@ def _echeance(emission: date, conditions: str) -> date:
     return emission + timedelta(days=30)
 
 
-def _ventes(  # noqa: PLR0915 — trois familles de ventes en un seul passage
+def _ventes(  # noqa: PLR0915 — three sales families in a single pass
     grand: Grand,
     clients: list[dict[str, Any]],
     produits: list[dict[str, Any]],
     categories: list[dict[str, Any]],
     rng: random.Random,
 ) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]], list[dict[str, Any]]]:
-    """Une facture par client actif et par mois échu de 2026.
+    """One invoice per active client and per elapsed month of 2026.
 
-    Janvier→mai : réglées. Juin : émises, non réglées. Juillet : un brouillon
-    chez un client sur quatre — un brouillon n'a PAS de numéro de facture
-    définitif ni d'écriture comptable, et c'est un cas que tout connecteur doit
-    rencontrer (`draft: true`, `invoice_number` provisoire, `status: "draft"`).
+    January→May: paid. June: issued, unpaid. July: a draft for one client
+    in four — a draft has NO final invoice number nor accounting entry, and
+    it's a case every connector must encounter (`draft: true`, a provisional
+    `invoice_number`, `status: "draft"`).
     """
     factures: list[dict[str, Any]] = []
     lignes_par_facture: dict[int, list[dict[str, Any]]] = {}
-    reglements: list[dict[str, Any]] = []  # (facture, date, écriture) — pour la banque
+    reglements: list[dict[str, Any]] = []  # (invoice, date, entry) — for the bank
     ident = 1
     prestations_vente = [p for p in produits if "Formation" not in p["label"]]
 
@@ -886,7 +887,7 @@ def _ventes(  # noqa: PLR0915 — trois familles de ventes en un seul passage
                     continue
                 emission = AUJOURDHUI
 
-            # Un à trois consultants facturés, stable pour un (client, mois).
+            # One to three consultants billed, stable for a given (client, month).
             tirage = random.Random(f"{client['id']}:{mois}:vente")
             nb = 1 + (client["id"] + mois) % 3
             jours_dispo = _jours_ouvres(2026, mois)
@@ -902,7 +903,7 @@ def _ventes(  # noqa: PLR0915 — trois familles de ventes en un seul passage
                 ht += ligne_ht
                 lignes.append(
                     {
-                        "id": 0,  # attribué plus bas, une fois la facture connue
+                        "id": 0,  # assigned below, once the invoice is known
                         "label": produit["label"],
                         "unit": "jour",
                         "quantity": str(quantite),
@@ -940,9 +941,9 @@ def _ventes(  # noqa: PLR0915 — trois familles de ventes en un seul passage
             analytique = _categorie(categories, _AGENCE_DU_CLIENT[client["id"]])
             ecriture = None
             if not brouillon:
-                # L'écriture de vente : le tiers au débit, le produit et la TVA
-                # au crédit. C'est ELLE qui porte le montant ; la facture en
-                # dérive, et non l'inverse.
+                # The sales entry: the third party at debit, the product and
+                # VAT at credit. THIS is what carries the amount; the invoice
+                # derives from it, not the other way around.
                 ecriture = grand.passer(
                     journal="VE",
                     jour=emission,
@@ -1026,11 +1027,11 @@ def _ventes(  # noqa: PLR0915 — trois familles de ventes en un seul passage
                 )
             ident += 1
 
-    # ── L'avoir ──────────────────────────────────────────────────────────────
-    # Correction d'un trop-facturé sur la première facture réglée. Un avoir est
-    # une facture à MONTANT NÉGATIF portant `status: "credit_note"` et
-    # `credited_invoice` — pas une entité d'un autre type. Un connecteur qui
-    # sommerait naïvement `amount` sans regarder le signe se trompe de CA.
+    # ── The credit note ───────────────────────────────────────────────────────
+    # Correction of an overbilling on the first paid invoice. A credit note is
+    # an invoice with a NEGATIVE AMOUNT carrying `status: "credit_note"` and
+    # `credited_invoice` — not an entity of a different type. A connector
+    # that naively sums `amount` without checking the sign gets revenue wrong.
     if reglements:
         origine = reglements[0]["facture"]
         ttc_avoir = -(round(float(origine["amount"]) * 100) // 10)
@@ -1105,7 +1106,7 @@ def _ventes(  # noqa: PLR0915 — trois familles de ventes en un seul passage
         ]
         ident += 1
 
-    # ── Les deux formations, facturées à des PARTICULIERS ────────────────────
+    # ── The two training sessions, billed to INDIVIDUALS ─────────────────────
     formation = next(p for p in produits if "Formation" in p["label"])
     for rang, client in enumerate(
         [c for c in clients if c["customer_type"] == "individual"], start=1
@@ -1225,10 +1226,10 @@ def _ventes(  # noqa: PLR0915 — trois familles de ventes en un seul passage
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Les achats — factures fournisseurs, lignes, décaissements
+#  Purchases — supplier invoices, lines, disbursements
 # ═════════════════════════════════════════════════════════════════════════════
 
-#: (fournisseur, libellé, HT en centimes, mensuel ?, mois d'émission si ponctuel)
+#: (supplier, label, amount excl. VAT in cents, monthly?, issue month if one-off)
 _ACHATS: tuple[tuple[str, str, int, bool, tuple[int, ...]], ...] = (
     ("Softalliance", "Licences plateforme data", 89_000, True, ()),
     ("Softalliance", "Abonnement observabilité", 34_000, True, ()),
@@ -1247,11 +1248,11 @@ def _achats(
     categories: list[dict[str, Any]],
     rng: random.Random,
 ) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]], list[dict[str, Any]]]:
-    """Les factures fournisseurs et leurs règlements.
+    """Supplier invoices and their payments.
 
-    Trois `accounting_status` distincts dans le jeu — `complete`, `entry`,
-    `validation_needed` — parce que c'est le champ sur lequel un cabinet
-    filtre, et qu'un jeu où tout vaut `complete` ne prouve rien.
+    Three distinct `accounting_status` values in the dataset — `complete`,
+    `entry`, `validation_needed` — because this is the field a firm filters
+    on, and a dataset where everything is `complete` proves nothing.
     """
     par_nom = {f["name"]: f for f in fournisseurs}
     compte_de = {nom: compte for nom, _, _, _, compte, _ in _FOURNISSEURS}
@@ -1273,7 +1274,7 @@ def _achats(
             ttc = ht + tva
             numero = f"{nom[:3].upper()}-2026-{mois:02d}{ident:03d}"
             echeance = jour + timedelta(days=fournisseur["supplier_due_date_delay"])
-            # Les factures de juin restent à payer ; les précédentes sont réglées.
+            # June invoices remain unpaid; earlier ones are settled.
             regle = mois <= 5
             paye_le = jour + timedelta(days=tirage.randint(20, 30)) if regle else None
             if paye_le and paye_le > AUJOURDHUI:
@@ -1374,11 +1375,11 @@ def _achats(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  La banque — transactions, rapprochements, paie, frais
+#  The bank — transactions, reconciliations, payroll, fees
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def _banque(  # noqa: PLR0915, PLR0917 — la banque voit passer TOUS les flux
+def _banque(  # noqa: PLR0915, PLR0917 — the bank sees ALL flows pass through
     grand: Grand,
     comptes_bancaires: list[dict[str, Any]],
     reglements_clients: list[dict[str, Any]],
@@ -1387,13 +1388,13 @@ def _banque(  # noqa: PLR0915, PLR0917 — la banque voit passer TOUS les flux
     categories: list[dict[str, Any]],
     rng: random.Random,
 ) -> tuple[list[dict[str, Any]], dict[int, list[int]], dict[int, list[int]]]:
-    """Les mouvements bancaires, et le rapprochement facture ↔ transaction.
+    """Bank movements, and invoice ↔ transaction reconciliation.
 
-    ┌─ TROIS TRANSACTIONS NON RAPPROCHÉES, DÉLIBÉRÉMENT ─────────────────────┐
-    │ Un jeu où tout est rapproché ne prouve rien : c'est justement la        │
-    │ transaction ORPHELINE qui fait le travail d'un cabinet, et le           │
-    │ `outstanding_balance` non nul qui doit remonter dans un tableau de      │
-    │ bord. Trois encaissements clients restent donc sans facture appariée.   │
+    ┌─ THREE UNRECONCILED TRANSACTIONS, DELIBERATELY ────────────────────────┐
+    │ A dataset where everything is reconciled proves nothing: it's exactly   │
+    │ the ORPHAN transaction that does the work for a firm, and the           │
+    │ nonzero `outstanding_balance` that must surface on a dashboard.         │
+    │ Three client receipts are therefore left without a matched invoice.     │
     └─────────────────────────────────────────────────────────────────────────┘
     """
     banque = next(j for j in journaux if j["code"] == "BQ")
@@ -1410,7 +1411,7 @@ def _banque(  # noqa: PLR0915, PLR0917 — la banque voit passer TOUS les flux
         evenements.append((r["jour"], "fournisseur", r))
     evenements.sort(key=lambda e: (e[0], e[1], e[2]["facture"]["id"]))
 
-    #: Les trois derniers encaissements clients restent NON rapprochés.
+    #: The last three client receipts remain UNRECONCILED.
     non_rapproches = {
         r["facture"]["id"] for r in sorted(reglements_clients, key=lambda r: r["jour"])[-3:]
     }
@@ -1486,11 +1487,11 @@ def _banque(  # noqa: PLR0915, PLR0917 — la banque voit passer TOUS les flux
         transactions.append(transaction)
         ident += 1
 
-    # ── La paie, du 1er au 6e mois ───────────────────────────────────────────
-    # 34 salariés. Un seul mouvement par mois : brut + charges au débit,
-    # banque au crédit. La paie n'a pas de facture — c'est la seule famille
-    # d'écritures du jeu qui n'a AUCUNE pièce, et un consommateur qui suppose
-    # « une écriture = une facture » se casse dessus.
+    # ── Payroll, from month 1 to month 6 ─────────────────────────────────────
+    # 34 employees. A single movement per month: gross pay + contributions at
+    # debit, bank at credit. Payroll has no invoice — it's the only entry
+    # family in the dataset with NO document, and a consumer that assumes
+    # "one entry = one invoice" breaks on it.
     for mois in range(1, 7):
         jour = _fin_mois(2026, mois) - timedelta(days=2)
         brut = 34 * 385_000 + mois * 12_000
@@ -1524,7 +1525,7 @@ def _banque(  # noqa: PLR0915, PLR0917 — la banque voit passer TOUS les flux
         )
         ident += 1
 
-    # ── Les frais bancaires ──────────────────────────────────────────────────
+    # ── Bank fees ─────────────────────────────────────────────────────────────
     for mois in range(1, 8):
         jour = date(2026, mois, 3)
         if jour > AUJOURDHUI:
@@ -1557,10 +1558,10 @@ def _banque(  # noqa: PLR0915, PLR0917 — la banque voit passer TOUS les flux
         )
         ident += 1
 
-    # ── Le virement interne vers le compte de réserve ────────────────────────
-    # Deux comptes bancaires, donc un mouvement ENTRE eux : c'est la seule
-    # écriture du jeu qui touche deux comptes 512, et elle vaut d'exister
-    # parce qu'un rapprochement naïf la compte deux fois en trésorerie.
+    # ── The internal transfer to the reserve account ─────────────────────────
+    # Two bank accounts, hence a movement BETWEEN them: it's the only entry
+    # in the dataset touching two 512 accounts, and it earns its place
+    # because a naive reconciliation counts it twice in cash flow.
     jour = date(2026, 4, 15)
     montant = 5_000_000
     grand.passer(
@@ -1605,13 +1606,13 @@ def _transaction(
     categories: list[dict[str, Any]],
     rng: random.Random,
 ) -> dict[str, Any]:
-    """Une ligne de relevé bancaire.
+    """A bank statement line.
 
-    `amount` est SIGNÉ : négatif au débit du compte. `outstanding_balance` est
-    le reste à rapprocher — `null` quand il n'y a rien à rapprocher, `"0.0"`
-    quand tout l'est. La nuance entre les deux existe chez le fournisseur, et
-    un consommateur qui les confond compte des transactions orphelines qui
-    n'en sont pas.
+    `amount` is SIGNED: negative when the account is debited. `outstanding_balance`
+    is what's left to reconcile — `null` when there's nothing to reconcile, `"0.0"`
+    when everything is. The distinction between the two exists at the vendor's
+    end, and a consumer that conflates them counts orphan transactions that
+    aren't.
     """
     horodatage = _dt(jour, rng.randint(3, 7), rng.randint(0, 59), 0, rng.randrange(10**6))
     return {
@@ -1640,27 +1641,26 @@ def _transaction(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  La périphérie — devis, abonnements, mandats, documents, demandes d'achat
+#  The periphery — quotes, subscriptions, mandates, documents, purchase requests
 # ═════════════════════════════════════════════════════════════════════════════
 #
-# ┌─ FIDÉLITÉ GRADUÉE, ET C'EST UNE DÉCISION ──────────────────────────────────┐
-# │ Les ressources ci-dessous existent chez le fournisseur et sont servies —   │
-# │ le périmètre demandé est « toute la surface v2 en lecture ». Mais elles    │
-# │ ne portent PAS le flux qu'insights360 consomme (facturation, banque,       │
-# │ comptabilité), et leur jeu de données est donc volontairement mince :      │
-# │ quelques éléments cohérents, aux champs déclarés par l'OpenAPI, sans la    │
-# │ mécanique d'écriture double qui porte le cœur.                             │
+# ┌─ GRADED FIDELITY, AND THAT'S A DELIBERATE DECISION ────────────────────────┐
+# │ The resources below exist at the vendor and are served — the requested     │
+# │ scope is "the full v2 surface, read-only." But they don't carry the flow   │
+# │ insights360 consumes (billing, banking, accounting), so their dataset      │
+# │ is deliberately thin: a few consistent items, with the fields declared     │
+# │ by the OpenAPI, without the double-entry machinery that carries the core.  │
 # │                                                                            │
-# │ Ce qui n'est PAS négociable même ici : la FORME. Une liste vide se pagine  │
-# │ comme les autres, une ressource inconnue rend le 404 du dialecte, et les   │
-# │ montants restent des chaînes. C'est la forme qui casse un connecteur, pas  │
-# │ le volume.                                                                 │
+# │ What is NOT negotiable even here: the SHAPE. An empty list paginates       │
+# │ like the others, an unknown resource returns the dialect's 404, and        │
+# │ amounts stay strings. It's the shape that breaks a connector, not          │
+# │ the volume.                                                                │
 # └────────────────────────────────────────────────────────────────────────────┘
 
 
 def _devis(clients: list[dict[str, Any]], produits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Cinq devis couvrant les cinq statuts documentés — `pending`, `accepted`,
-    `denied`, `expired`, `invoiced`. Un jeu à statut unique ne teste aucun filtre."""
+    """Five quotes covering the five documented statuses — `pending`, `accepted`,
+    `denied`, `expired`, `invoiced`. A single-status dataset tests no filter."""
     statuts = ("pending", "accepted", "denied", "expired", "invoiced")
     actifs = [c for c in clients if c["customer_type"] == "company"]
     devis = []
@@ -1700,7 +1700,7 @@ def _devis(clients: list[dict[str, Any]], produits: list[dict[str, Any]]) -> lis
 def _abonnements(
     clients: list[dict[str, Any]], produits: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Deux abonnements de TMA — le cas « facturation récurrente »."""
+    """Two maintenance (TMA) subscriptions — the "recurring billing" case."""
     actifs = [c for c in clients if c["customer_type"] == "company"]
     abonnements = []
     for ident in (1, 2):
@@ -1733,7 +1733,7 @@ def _abonnements(
 def _mandats(
     clients: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Mandats SEPA, GoCardless, Pro Account — et les candidats à migration."""
+    """SEPA, GoCardless, Pro Account mandates — and the migration candidates."""
     actifs = [c for c in clients if c["customer_type"] == "company"][:4]
     sepa, gocardless, pro, migrations = [], [], [], []
     for ident, client in enumerate(actifs, start=1):
@@ -1771,7 +1771,7 @@ def _mandats(
 
 
 def _documents_commerciaux(clients: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Les trois `document_type` documentés, un exemplaire chacun."""
+    """The three documented `document_type` values, one instance each."""
     types = ("proforma", "shipping_order", "purchasing_order")
     actifs = [c for c in clients if c["customer_type"] == "company"]
     documents = []
@@ -1823,12 +1823,12 @@ def _demandes_achat(fournisseurs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _exports() -> dict[str, list[dict[str, Any]]]:
-    """Trois exports pré-existants — un par type.
+    """Three pre-existing exports — one per type.
 
-    Le fournisseur les CRÉE par POST puis les sert par GET : le mock, en
-    lecture seule, n'en sert que le second temps. Un export porte un `status`
-    et une `url` de fichier ; le fichier lui-même n'est pas servi — il n'a
-    aucun intérêt pour un connecteur qui n'en lira jamais le xlsx.
+    The vendor CREATES them via POST then serves them via GET: the mock,
+    being read-only, only serves the second step. An export carries a
+    `status` and a file `url`; the file itself isn't served — it holds no
+    interest for a connector that will never read the xlsx.
     """
     jour = date(2026, 7, 1)
 
@@ -1851,7 +1851,7 @@ def _exports() -> dict[str, list[dict[str, Any]]]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Dérivés — balance, soldes bancaires, journal des changements
+#  Derived data — trial balance, bank balances, changelog
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -1863,15 +1863,15 @@ def balance(
     fin: date,
     auxiliaires: bool,
 ) -> list[dict[str, Any]]:
-    """La balance générale : un cumul débit / crédit par compte, sur la période.
+    """The trial balance: a debit / credit total per account, over the period.
 
-    Calculée À LA DEMANDE depuis les lignes d'écriture, jamais stockée. C'est
-    ce qui rend impossible la seule incohérence qui compte : une balance qui
-    ne correspond plus au grand livre dont elle est censée sortir.
+    Computed ON DEMAND from the entry lines, never stored. This is what makes
+    the one inconsistency that matters impossible: a trial balance that no
+    longer matches the ledger it's supposed to come from.
 
-    `is_auxiliary` : quand il est faux, les comptes auxiliaires (411XXXXX,
-    401XXXXX) sont AGRÉGÉS dans leur racine — c'est le comportement du
-    fournisseur, et un consommateur qui somme les deux vues double son actif.
+    `is_auxiliary`: when false, subsidiary accounts (411XXXXX, 401XXXXX) are
+    AGGREGATED into their root — this is the vendor's behavior, and a
+    consumer that sums both views doubles its assets.
     """
     par_id = {c["id"]: c for c in comptes}
     cumuls: dict[str, list[int]] = {}
@@ -1895,10 +1895,10 @@ def balance(
     return [
         {
             "number": numero,
-            # `formatted_number` : le numéro complété à huit caractères, forme
-            # sur laquelle les logiciels comptables français s'alignent. Le
-            # fournisseur sert les DEUX, et ils ne se déduisent pas l'un de
-            # l'autre pour un auxiliaire (`411LUMIN` ne se complète pas de zéros).
+            # `formatted_number`: the number padded to eight characters, the
+            # shape French accounting software aligns on. The vendor serves
+            # BOTH, and one can't be derived from the other for a subsidiary
+            # account (`411LUMIN` doesn't get zero-padded).
             "formatted_number": numero.ljust(8, "0") if numero.isdigit() else numero,
             "label": libelles[numero],
             "debits": _euros(debit),
@@ -1913,12 +1913,12 @@ def _recaler_soldes_bancaires(
     lignes: list[dict[str, Any]],
     comptes: list[dict[str, Any]],
 ) -> None:
-    """Le solde d'un compte bancaire EST le solde de son compte 512.
+    """A bank account's balance IS the balance of its 512 account.
 
-    Sans ce recalage, la banque et la comptabilité se contrediraient dans le
-    même jeu de données — et un tableau de bord de trésorerie construit sur
-    l'une des deux sources donnerait un chiffre différent de l'autre, sans
-    qu'aucun test ne le voie.
+    Without this recalibration, the bank and the accounting would contradict
+    each other in the same dataset — and a cash-flow dashboard built on
+    either source would give a different figure from the other, with no
+    test ever catching it.
     """
     par_id = {c["id"]: c for c in comptes}
     for compte_bancaire in comptes_bancaires:
@@ -1931,9 +1931,9 @@ def _recaler_soldes_bancaires(
         compte_bancaire["balance"] = _euros(solde)
 
 
-#: Les sept familles pour lesquelles le fournisseur expose un changelog. Toute
-#: autre ressource n'a PAS de journal de changements — un consommateur qui en
-#: attendrait un pour les écritures se trompe : il n'y a que les LIGNES.
+#: The seven families for which the vendor exposes a changelog. Any other
+#: resource has NO changelog — a consumer that expected one for entries
+#: would be wrong: there are only LINES.
 FAMILLES_CHANGELOG: tuple[str, ...] = (
     "customer_invoices",
     "supplier_invoices",
@@ -1944,30 +1944,30 @@ FAMILLES_CHANGELOG: tuple[str, ...] = (
     "transactions",
 )
 
-#: Deux familles supplémentaires servies par l'API mais absentes du guide :
-#: les changements de CATÉGORIES analytiques. Elles ont leur propre forme.
+#: Two extra families served by the API but absent from the guide: changes
+#: to analytical CATEGORIES. They have their own shape.
 FAMILLES_CHANGELOG_CATEGORIES: tuple[str, ...] = (
     "ledger_entries_categories",
     "ledger_entry_lines_categories",
 )
 
-#: Les devis ont aussi un changelog (`/changelogs/quotes`), documenté dans la
-#: référence mais pas dans le guide.
+#: Quotes also have a changelog (`/changelogs/quotes`), documented in the
+#: reference but not in the guide.
 FAMILLES_CHANGELOG_AUTRES: tuple[str, ...] = ("quotes",)
 
 
 def _journal_des_changements(donnees: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Un événement `insert` à la création, un `update` si la ligne a bougé.
+    """An `insert` event at creation, an `update` if the line changed.
 
-    ┌─ CE QUE LE CHANGELOG N'EST PAS ─────────────────────────────────────────┐
-    │ Ce n'est pas une copie de la ressource : un événement porte l'ID, le    │
-    │ type d'opération et trois horodatages, RIEN d'autre. Il faut donc un    │
-    │ second appel — `filter=[{"field":"id","operator":"in","value":[…]}]` —  │
-    │ pour obtenir l'état. C'est le pattern que le fournisseur recommande, et │
-    │ c'est celui que le connecteur d'insights360 doit exercer.               │
+    ┌─ WHAT THE CHANGELOG IS NOT ─────────────────────────────────────────────┐
+    │ This isn't a copy of the resource: an event carries the ID, the         │
+    │ operation type and three timestamps, NOTHING else. A second call is    │
+    │ needed — `filter=[{"field":"id","operator":"in","value":[…]}]` —         │
+    │ to get the state. This is the pattern the vendor recommends, and       │
+    │ the one insights360's connector must exercise.                          │
     │                                                                         │
-    │ Ordre CHRONOLOGIQUE croissant (le plus ancien d'abord), et rétention de │
-    │ quatre semaines : une `start_date` plus ancienne rend 422.              │
+    │ Ascending CHRONOLOGICAL order (oldest first), and a retention of        │
+    │ four weeks: an older `start_date` returns 422.                          │
     └─────────────────────────────────────────────────────────────────────────┘
     """
     familles = {
@@ -2006,8 +2006,8 @@ def _journal_des_changements(donnees: dict[str, Any]) -> dict[str, list[dict[str
         evenements.sort(key=lambda e: (e["processed_at"], e["id"]))
         journal[nom] = evenements
 
-    # Les changements de catégories analytiques : un événement par écriture et
-    # par ligne effectivement ventilée.
+    # Analytical category changes: one event per entry and per line that
+    # actually carries a split.
     journal["ledger_entries_categories"] = [
         {
             "id": e["id"],
@@ -2036,17 +2036,17 @@ def _journal_des_changements(donnees: dict[str, Any]) -> dict[str, list[dict[str
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  L'assemblage
+#  Assembly
 # ═════════════════════════════════════════════════════════════════════════════
 
 
 def build_realiste_dataset(seed: int = 42) -> dict[str, Any]:
-    """Construit le monde comptable complet. Une seule voie d'entrée.
+    """Builds the complete accounting world. A single entry point.
 
-    L'ordre est PORTEUR : les référentiels d'abord (ils portent les identifiants
-    auxquels tout le reste se réfère), puis les tiers, puis les flux, puis les
-    dérivés — la balance et les soldes bancaires ne peuvent pas être calculés
-    avant que la dernière écriture soit passée.
+    The order MATTERS: reference data first (it carries the ids everything
+    else refers to), then third parties, then flows, then derived data —
+    the trial balance and bank balances can't be computed before the last
+    entry is posted.
     """
     rng = random.Random(seed)
 
@@ -2064,9 +2064,9 @@ def build_realiste_dataset(seed: int = 42) -> dict[str, Any]:
 
     grand = Grand(journaux, comptes)
 
-    # L'à-nouveau : le bilan d'ouverture de l'exercice. Sans lui, la banque
-    # part de zéro et tombe en négatif dès la première paie — un jeu de
-    # données où la trésorerie est absurde n'est pas un jeu réaliste.
+    # The opening balance: the fiscal year's opening statement. Without it,
+    # the bank starts from zero and goes negative on the very first payroll
+    # run — a dataset where cash is absurd isn't a realistic dataset.
     grand.passer(
         journal="AN",
         jour=date(2026, 1, 1),
@@ -2105,7 +2105,7 @@ def build_realiste_dataset(seed: int = 42) -> dict[str, Any]:
     exports = _exports()
 
     donnees: dict[str, Any] = {
-        # ── Référentiels ────────────────────────────────────────────────────
+        # ── Reference data ───────────────────────────────────────────────────
         "journals": journaux,
         "ledger_accounts": comptes,
         "fiscal_years": exercices,
@@ -2113,21 +2113,21 @@ def build_realiste_dataset(seed: int = 42) -> dict[str, Any]:
         "categories": categories,
         "bank_establishments": etablissements,
         "bank_accounts": comptes_bancaires,
-        # ── Tiers ───────────────────────────────────────────────────────────
+        # ── Third parties ────────────────────────────────────────────────────
         "customers": clients,
         "customer_contacts": contacts,
         "suppliers": fournisseurs,
         "products": produits,
-        # ── Flux ────────────────────────────────────────────────────────────
+        # ── Flows ────────────────────────────────────────────────────────────
         "customer_invoices": factures_clients,
         "customer_invoice_lines": lignes_vente,
         "supplier_invoices": factures_fournisseurs,
         "supplier_invoice_lines": lignes_achat,
         "transactions": transactions,
-        # ── Comptabilité ────────────────────────────────────────────────────
+        # ── Accounting ───────────────────────────────────────────────────────
         "ledger_entries": grand.ecritures,
         "ledger_entry_lines": grand.lignes,
-        # ── Périphérie ──────────────────────────────────────────────────────
+        # ── Periphery ────────────────────────────────────────────────────────
         "quotes": devis,
         "billing_subscriptions": abonnements,
         "sepa_mandates": sepa,
@@ -2155,7 +2155,7 @@ def build_realiste_dataset(seed: int = 42) -> dict[str, Any]:
             }
         ],
         **exports,
-        # ── Appariements (facture ↔ transaction), servis en sous-ressource ──
+        # ── Matches (invoice ↔ transaction), served as a sub-resource ────────
         "matched_transactions_par_facture_client": apparie_client,
         "matched_transactions_par_facture_fournisseur": apparie_fournisseur,
     }
@@ -2164,8 +2164,8 @@ def build_realiste_dataset(seed: int = 42) -> dict[str, Any]:
     return donnees
 
 
-#: (collection, champ) — les champs FACULTATIFS que le locataire réel relevé
-#: n'a jamais renseignés. Cf. l'encadré de `Settings.champs_facultatifs_servis`.
+#: (collection, field) — the OPTIONAL fields that the real tenant surveyed
+#: never populated. See the box in `settings.optional_fields_served`.
 CHAMPS_FACULTATIFS: tuple[tuple[str, str], ...] = (
     ("categories", "analytical_code"),
     ("customer_invoice_lines", "product"),
@@ -2174,27 +2174,27 @@ CHAMPS_FACULTATIFS: tuple[tuple[str, str], ...] = (
 
 
 def _gommer_champs_facultatifs(donnees: dict[str, Any]) -> None:
-    """Met à `null` les champs facultatifs, sauf si l'environnement les demande.
+    """Sets optional fields to `null`, unless the environment asks for them.
 
-    Le geste est fait sur le jeu CONSTRUIT et non à la génération : le monde
-    reste cohérent (une ligne de vente SAIT de quel produit elle vient, et les
-    montants en découlent), c'est seulement ce qui est SERVI qui s'aligne sur
-    ce que le fournisseur sert vraiment.
+    This is done on the BUILT dataset, not at generation time: the world
+    stays coherent (a sales line KNOWS which product it comes from, and the
+    amounts derive from that) — it's only what's SERVED that aligns with
+    what the vendor actually serves.
 
-    ⚠️ Passer à `null` et non SUPPRIMER la clé : l'OpenAPI déclare les trois
-    champs, et le fournisseur les rend bien — à `null`. Un mock qui les
-    omettrait serait divergent dans l'autre sens, et cacherait au consommateur
-    que la clé existe.
+    ⚠️ Set to `null`, don't DELETE the key: the OpenAPI declares all three
+    fields, and the vendor does return them — as `null`. A mock that omitted
+    them would diverge in the other direction, and would hide from the
+    consumer that the key exists.
     """
-    if settings.champs_facultatifs_servis:
+    if settings.optional_fields_served:
         return
 
     def _elements(valeur: Any) -> list[dict[str, Any]]:
-        """Les lignes d'une collection, qu'elle soit une liste ou un index.
+        """A collection's rows, whether it's a list or an index.
 
-        Les LIGNES de facture sont rangées par facture (`{id: [ligne, …]}`) et
-        non à plat : les traiter comme une liste itérerait sur les clés, ne
-        modifierait rien, et le gommage passerait pour appliqué.
+        Invoice LINES are grouped by invoice (`{id: [line, …]}`) rather than
+        flat: treating them as a list would iterate over the keys, change
+        nothing, and the scrubbing would look applied when it wasn't.
         """
         if isinstance(valeur, list):
             return [e for e in valeur if isinstance(e, dict)]
@@ -2207,11 +2207,11 @@ def _gommer_champs_facultatifs(donnees: dict[str, Any]) -> None:
             if champ in element:
                 element[champ] = None
 
-    # Les VENTILATIONS portent une copie du code analytique de leur catégorie.
-    # Les oublier laisserait le mock se contredire : la catégorie sans code, la
-    # ventilation qui la vise avec — et un consommateur qui lit la seconde
-    # resterait vert. Elles sont imbriquées dans les porteurs, pas dans une
-    # collection à elles.
+    # SPLITS carry a copy of their category's analytical code. Forgetting
+    # them would leave the mock contradicting itself: the category without a
+    # code, the split that targets it carrying one — and a consumer reading
+    # the latter would stay none the wiser. They're nested inside their
+    # carriers, not in a collection of their own.
     for collection in ("ledger_entries", "ledger_entry_lines", "transactions"):
         for porteur in donnees.get(collection, []):
             if not isinstance(porteur, dict):
