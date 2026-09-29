@@ -1,29 +1,30 @@
-"""Authentification — Bearer statique et scopes, le dialecte exact de Pennylane.
+"""Authentication — static Bearer token and scopes, Pennylane's exact dialect.
 
-Le régime le plus simple des cinq mocks de l'écosystème : pas de JWT à
-fabriquer (BoondManager), pas d'échange client_credentials (Entra), pas
-d'assertion RS256 (GA4), pas d'en-tête de version (LinkedIn). Un jeton de
-compagnie, longue durée, porté par `Authorization: Bearer <TOKEN>`.
+The simplest regime of the ecosystem's five mocks: no JWT to forge
+(BoondManager), no client_credentials exchange (Entra), no RS256 assertion
+(GA4), no version header (LinkedIn). A long-lived company token, carried by
+`Authorization: Bearer <TOKEN>`.
 
-Ce qui fait l'intérêt du dialecte est ailleurs : les **scopes**.
+What makes the dialect interesting is elsewhere: the **scopes**.
 
-┌─ 401 ET 403 NE SE SOIGNENT PAS PAREIL ──────────────────────────────────────┐
-│ 401 — le jeton est absent, invalide ou expiré. Les trois cas sont            │
-│       INDISTINCTS chez le fournisseur : un seul message, aucun indice sur    │
-│       lequel des trois. Il faut regénérer un jeton.                          │
-│ 403 — le jeton est valide, mais ne porte pas le scope requis. Le message     │
-│       NOMME le scope manquant, et c'est la seule information actionnable de  │
-│       toute l'API : sans elle on regénère un jeton au hasard.                │
+┌─ 401 AND 403 ARE NOT HANDLED THE SAME WAY ──────────────────────────────────┐
+│ 401 — the token is missing, invalid or expired. The three cases are         │
+│       INDISTINGUISHABLE at the provider: a single message, no hint as to    │
+│       which of the three. A new token must be regenerated.                  │
+│ 403 — the token is valid, but does not carry the required scope. The        │
+│       message NAMES the missing scope, and it's the only actionable        │
+│       information in the whole API : without it you regenerate a token     │
+│       at random.                                                            │
 │                                                                              │
-│ Ni l'un ni l'autre n'est retentable. Un client qui rejoue un 403 en          │
-│ espérant mieux boucle jusqu'à épuisement de ses tentatives, puis échoue sur  │
-│ un message de timeout qui ne dit rien du vrai problème.                      │
+│ Neither is worth retrying. A client that replays a 403 hoping for better    │
+│ loops until it exhausts its attempts, then fails on a timeout message that  │
+│ says nothing about the real problem.                                        │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-Le scope d'une route se déclare dans `app.py` (champ `scope` de la
-`RessourceSpec`) et vient de l'OpenAPI officiel, opération par opération.
-`GET /me` est le seul endpoint SANS scope requis — c'est justement lui qui sert
-à découvrir les scopes dont on dispose.
+A route's scope is declared in `app.py` (the `scope` field of
+`ResourceSpec`) and comes from the official OpenAPI, operation by operation.
+`GET /me` is the only endpoint WITHOUT a required scope — it is precisely
+the one used to discover which scopes are available.
 """
 
 from __future__ import annotations
@@ -31,39 +32,40 @@ from __future__ import annotations
 from .settings import settings
 
 
-def jeton_de_l_entete(valeur: str | None) -> str | None:
-    """Extrait le jeton de `Authorization: Bearer <TOKEN>`.
+def token_from_header(value: str | None) -> str | None:
+    """Extracts the token from `Authorization: Bearer <TOKEN>`.
 
-    Le préfixe est comparé sans tenir compte de la casse : les bibliothèques
-    HTTP écrivent aussi bien `Bearer` que `bearer`, et refuser la seconde
-    forme serait une sévérité que le fournisseur n'a pas.
+    The prefix is compared case-insensitively: HTTP libraries write both
+    `Bearer` and `bearer`, and refusing the latter form would be a strictness
+    the provider does not have.
     """
-    if not valeur:
+    if not value:
         return None
-    schema, _, jeton = valeur.partition(" ")
-    if schema.lower() != "bearer":
+    scheme, _, token = value.partition(" ")
+    if scheme.lower() != "bearer":
         return None
-    jeton = jeton.strip()
-    return jeton or None
+    token = token.strip()
+    return token or None
 
 
-def jeton_est_valide(jeton: str | None) -> bool:
-    return jeton is not None and jeton == settings.token
+def token_is_valid(token: str | None) -> bool:
+    return token is not None and token == settings.token
 
 
-def scope_accorde(requis: str | None) -> bool:
-    """Le scope requis est-il porté par le jeton ?
+def scope_granted(required: str | None) -> bool:
+    """Does the token carry the required scope?
 
-    Un endpoint documenté « requires one of `x:readonly`, `x:all` » se déclare
-    avec `x:readonly` : porter `x:all` doit suffire, c'est le scope le plus
-    large. D'où la tolérance explicite ci-dessous — sans elle, un jeton
-    d'écriture se verrait refuser la lecture, ce qui n'arrive pas en réel.
+    An endpoint documented as "requires one of `x:readonly`, `x:all`" is
+    declared with `x:readonly`: carrying `x:all` must be enough, since it's
+    the broader scope. Hence the explicit tolerance below — without it, a
+    write token would be refused read access, which does not happen in
+    reality.
     """
-    if requis is None:
+    if required is None:
         return True
-    if requis in settings.scopes:
+    if required in settings.scopes:
         return True
-    base, sep, suffixe = requis.partition(":")
-    if sep and suffixe == "readonly":
+    base, sep, suffix = required.partition(":")
+    if sep and suffix == "readonly":
         return f"{base}:all" in settings.scopes
     return False

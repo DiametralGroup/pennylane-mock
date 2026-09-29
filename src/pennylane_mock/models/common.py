@@ -1,19 +1,21 @@
-"""Modèles de base — l'enveloppe, l'erreur, et les marqueurs d'honnêteté.
+"""Base models — the envelope, the error, and the honesty markers.
 
-Typer donne d'un coup le contrat OpenAPI, la page /docs et des formes
-exploitables par les consommateurs. Mais typer POUSSE À INVENTER : dès qu'un
-champ manque à la documentation, la tentation est de le déduire. La parade est
-structurelle, et c'est la même que dans les quatre autres mocks :
+Typing gives you the OpenAPI contract, the /docs page, and shapes consumers
+can use, all at once. But typing PUSHES YOU TO INVENT: as soon as a field is
+missing from the documentation, the temptation is to guess it. The
+safeguard is structural, and it's the same one used in the other four mocks:
 
-  • `extra="allow"` partout — le modèle décrit ce qu'on SAIT, pas ce qui EST ;
-  • `x-pennylane-confidence` sur tout champ non adossé à l'OpenAPI officiel ;
-  • un test échoue si un champ `unverified` n'est pas inscrit dans
-    docs/UNVERIFIED-FIELDS.md — l'honnêteté est une contrainte de build.
+  • `extra="allow"` everywhere — the model describes what we KNOW, not what
+    IS;
+  • `x-pennylane-confidence` on every field not backed by the official
+    OpenAPI;
+  • a test fails if an `unverified` field isn't logged in
+    docs/UNVERIFIED-FIELDS.md — honesty is a build constraint.
 
-La source de vérité de ce mock est l'**OpenAPI embarqué dans chacune des 163
-pages de référence** de pennylane.readme.io (relevé le 2026-09-02, fusionné en
-une spec unique — cf. docs/EXTRACTION.md). Tout ce qui en vient est attesté.
-Tout le reste est marqué.
+This mock's source of truth is the **OpenAPI embedded in each of the 163
+reference pages** at pennylane.readme.io (checked 2026-09-02, merged into a
+single spec — cf. docs/EXTRACTION.md). Everything that comes from it is
+attested. Everything else is marked.
 """
 
 from __future__ import annotations
@@ -24,49 +26,49 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 def unverified(description: str) -> dict[str, Any]:
-    """Marque un champ dont le nom, la forme ou les valeurs ne sont PAS attestés.
+    """Marks a field whose name, shape or values are NOT attested.
 
-    À utiliser via `json_schema_extra`. Tout champ ainsi marqué DOIT figurer
-    dans `docs/UNVERIFIED-FIELDS.md` — `tests/test_contract_is_current.py` le
-    vérifie.
+    Used via `json_schema_extra`. Any field so marked MUST appear in
+    `docs/UNVERIFIED-FIELDS.md` — `tests/test_contract_is_current.py`
+    checks it.
     """
     return {"x-pennylane-confidence": "unverified", "x-pennylane-note": description}
 
 
 def invented(description: str) -> dict[str, Any]:
-    """Marque un champ ou un comportement qui n'existe PAS chez Pennylane."""
+    """Marks a field or behavior that does NOT exist at Pennylane."""
     return {"x-pennylane-confidence": "invented", "x-pennylane-note": description}
 
 
-class Permissif(BaseModel):
-    """Base commune : les champs inconnus passent au lieu d'être rejetés.
+class Permissive(BaseModel):
+    """Common base: unknown fields pass through instead of being rejected.
 
-    Un modèle strict transformerait chaque évolution de l'API réelle en panne
-    du mock. Les modèles décrivent ce qui est émis, pas tout ce que Pennylane
-    peut exposer.
+    A strict model would turn every change to the real API into a mock
+    failure. The models describe what is emitted, not everything Pennylane
+    can expose.
     """
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
-class Lien(Permissif):
-    """Une collection imbriquée — `{"url": "…"}`, jamais un tableau.
+class Link(Permissive):
+    """A nested collection — `{"url": "…"}`, never an array.
 
-    C'est la différence de forme la plus structurante entre v1 et v2 : les
-    lignes d'une facture ne sont pas DANS la facture, elles sont derrière un
-    lien. Un connecteur écrit pour la v1 lit une liste vide et charge zéro
-    ligne sans erreur.
+    This is the most structural shape difference between v1 and v2: an
+    invoice's lines are not IN the invoice, they're behind a link. A
+    connector written for v1 reads an empty list and loads zero rows without
+    an error.
     """
 
     url: str
 
 
-class Reference(Permissif):
-    """Un pointeur vers une autre ressource — `{"id": 42, "url": "…"}`.
+class Reference(Permissive):
+    """A pointer to another resource — `{"id": 42, "url": "…"}`.
 
-    Certaines références ne portent QUE `id` (`ledger_entry`,
-    `billing_subscription`, `category_group`) ; d'autres portent aussi `url`.
-    Le fournisseur n'est pas uniforme là-dessus, et `url` est donc optionnel.
+    Some references carry ONLY `id` (`ledger_entry`, `billing_subscription`,
+    `category_group`); others also carry `url`. The provider isn't uniform
+    about this, so `url` is optional.
     """
 
     id: int
@@ -74,125 +76,129 @@ class Reference(Permissif):
 
 
 class Page[T](BaseModel):
-    """L'enveloppe de pagination : `{items, has_more, next_cursor}`.
+    """The pagination envelope: `{items, has_more, next_cursor}`.
 
-    `next_cursor` est **`null`**, pas absent et pas `""`, quand il n'y a plus
-    rien : un consommateur qui teste `if "next_cursor" in body` boucle à
-    l'infini.
+    `next_cursor` is **`null`**, not absent and not `""`, when there's
+    nothing left: a consumer that tests `if "next_cursor" in body` loops
+    forever.
 
-    ┌─ L'ENVELOPPE N'EST PAS UNIFORME, ET L'OPENAPI NE LE DIT PAS ───────────┐
-    │ Ce modèle portait `additionalProperties: false` — « exactement trois    │
-    │ clés » — sur la foi de l'OpenAPI officiel. Confronté à une instance     │
-    │ réelle le 2026-09-04 (`scripts/compare_real.py`), c'est faux : QUATRE   │
-    │ collections sur seize ajoutent une pagination par OFFSET à côté du      │
-    │ curseur — `current_page`, `per_page`, `total_items`, `total_pages`.     │
+    ┌─ THE ENVELOPE ISN'T UNIFORM, AND THE OPENAPI DOESN'T SAY SO ───────────┐
+    │ This model used to carry `additionalProperties: false` — "exactly     │
+    │ three keys" — on the strength of the official OpenAPI. Checked        │
+    │ against a real instance on 2026-09-04 (`scripts/compare_real.py`),     │
+    │ that's wrong: FOUR collections out of sixteen add an OFFSET            │
+    │ pagination alongside the cursor — `current_page`, `per_page`,          │
+    │ `total_items`, `total_pages`.                                          │
     │                                                                         │
-    │ Ce sont `journals`, `ledger_accounts`, `ledger_entries` et              │
-    │ `fiscal_years`. Pas `ledger_entry_lines`, pourtant de la même famille : │
-    │ il n'y a donc aucune règle à deviner, seulement une observation à       │
-    │ reproduire.                                                             │
+    │ These are `journals`, `ledger_accounts`, `ledger_entries` and          │
+    │ `fiscal_years`. Not `ledger_entry_lines`, although it's in the same    │
+    │ family: there is no rule to guess here, only an observation to        │
+    │ reproduce.                                                             │
     │                                                                         │
-    │ Le mock affirmait donc une régularité que le fournisseur n'a pas — et   │
-    │ un mock plus régulier que la réalité est le même défaut qu'un mock plus │
-    │ permissif : il valide du code qui casse ailleurs. Un consommateur qui   │
-    │ aurait voulu afficher un total, compter les pages ou court-circuiter le │
-    │ curseur aurait trouvé le champ en production et pas ici.                │
+    │ So the mock was asserting a regularity the provider doesn't have — and │
+    │ a mock more regular than reality is the same defect as a mock too      │
+    │ permissive: it validates code that breaks elsewhere. A consumer that   │
+    │ wanted to display a total, count pages or short-circuit the cursor     │
+    │ would have found the field in production and not here.                │
     │                                                                         │
-    │ Et elles valent `null` : présentes, vides. Un consommateur qui teste    │
-    │ leur PRÉSENCE pour choisir son mode de pagination les trouve, bascule    │
-    │ sur l'offset, et lit `null` partout — sans une erreur.                   │
+    │ And they hold `null`: present, empty. A consumer that tests their      │
+    │ PRESENCE to pick its pagination mode finds them, switches to offset,    │
+    │ and reads `null` everywhere — without an error.                        │
     │                                                                          │
-    │ D'où `extra="allow"` : les quatre clés sont rendues là où elles ont été  │
-    │ OBSERVÉES, et nulle part ailleurs. Cf. docs/UNVERIFIED-FIELDS.md.        │
+    │ Hence `extra="allow"`: the four keys are rendered where they were       │
+    │ OBSERVED, and nowhere else. Cf. docs/UNVERIFIED-FIELDS.md.              │
     └─────────────────────────────────────────────────────────────────────────┘
     """
 
     model_config = ConfigDict(extra="allow")
 
-    #: Pagination par OFFSET, servie par les seules collections où elle a été
-    #: observée. Déclarée ici POUR LE CONTRAT : la réponse est un `JSONResponse`
-    #: bâti sur le dict de `paginer`, donc ces clés sont réellement ABSENTES
-    #: ailleurs, et non rendues à `null`. Rendre `"total_pages": null` sur une
-    #: collection qui ne la porte pas serait un troisième dialecte, inventé.
+    #: OFFSET pagination, served only by the collections where it was
+    #: observed. Declared here FOR THE CONTRACT: the response is a
+    #: `JSONResponse` built on `paginate`'s dict, so these keys are really
+    #: ABSENT elsewhere, not rendered as `null`. Rendering `"total_pages":
+    #: null` on a collection that doesn't carry it would be a third,
+    #: invented dialect.
     current_page: int | None = Field(
-        default=None, description="Rang de la page — `null` sous curseur."
+        default=None, description="Page rank — `null` under cursor pagination."
     )
-    per_page: int | None = Field(default=None, description="Taille de page — `null` sous curseur.")
+    per_page: int | None = Field(
+        default=None, description="Page size — `null` under cursor pagination."
+    )
     total_items: int | None = Field(
-        default=None, description="Total d'éléments — `null` sous curseur."
+        default=None, description="Total element count — `null` under cursor pagination."
     )
     total_pages: int | None = Field(
-        default=None, description="Total de pages — `null` sous curseur."
+        default=None, description="Total page count — `null` under cursor pagination."
     )
 
     items: list[T]
-    has_more: bool = Field(description="Une page supplémentaire existe-t-elle ?")
+    has_more: bool = Field(description="Does another page exist?")
     next_cursor: str | None = Field(
         default=None,
-        description="Curseur de la page suivante ; `null` à la fin des résultats.",
+        description="Cursor of the next page; `null` at the end of the results.",
     )
 
 
-class ErreurPennylane(Permissif):
-    """Le corps d'erreur — `{"error", "status"}`, et rien d'autre.
+class PennylaneError(Permissive):
+    """The error body — `{"error", "status"}`, and nothing else.
 
-    ⚠️ Le guide « Error Handling & Status Codes » décrit une AUTRE forme
-    (`{"error", "message", "details"}`). L'OpenAPI, lui, déclare celle-ci
-    uniformément sur les 91 opérations GET. Divergence inscrite dans
-    docs/UNVERIFIED-FIELDS.md ; c'est l'OpenAPI qui est suivi.
+    WARNING: the "Error Handling & Status Codes" guide describes a DIFFERENT
+    shape (`{"error", "message", "details"}`). The OpenAPI, meanwhile,
+    declares this one uniformly across the 91 GET operations. Divergence
+    logged in docs/UNVERIFIED-FIELDS.md; the OpenAPI is the one followed.
 
-    Le **429 n'a pas de corps JSON du tout** : il rend du texte brut.
+    The **429 has no JSON body at all**: it renders plain text.
     """
 
     error: str
     status: int
 
 
-#: Réutilisé sur chaque route (`responses=REPONSES_ERREUR`) : sans lui, le
-#: contrat généré ne décrirait que le chemin heureux, et un consommateur ne
-#: saurait pas quelles pannes il doit savoir traiter.
-REPONSES_ERREUR: dict[int | str, dict[str, Any]] = {
+#: Reused on every route (`responses=ERROR_RESPONSES`): without it, the
+#: generated contract would only describe the happy path, and a consumer
+#: wouldn't know which failures it needs to handle.
+ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {
-        "model": ErreurPennylane,
+        "model": PennylaneError,
         "description": (
-            "Paramètre invalide : `limit` hors bornes (elle n'est PAS rabotée), "
-            "`cursor` illisible, `filter` mal formé, ou `start_date` et `cursor` "
-            "envoyés ensemble sur un changelog."
+            "Invalid parameter: `limit` out of bounds (it is NOT clamped), "
+            "unreadable `cursor`, malformed `filter`, or `start_date` and `cursor` "
+            "sent together on a changelog."
         ),
     },
     401: {
-        "model": ErreurPennylane,
+        "model": PennylaneError,
         "description": (
-            "Jeton absent, invalide ou expiré — les trois cas sont indistincts. "
-            "N'est PAS retentable."
+            "Token missing, invalid or expired — the three cases are indistinguishable. "
+            "NOT retryable."
         ),
     },
     403: {
-        "model": ErreurPennylane,
+        "model": PennylaneError,
         "description": (
-            "Le jeton ne porte pas le scope requis. Le message NOMME le scope "
-            "manquant. N'est PAS retentable."
+            "The token does not carry the required scope. The message NAMES the "
+            "missing scope. NOT retryable."
         ),
     },
     404: {
-        "model": ErreurPennylane,
-        "description": "Ressource inconnue, ou appartenant à une autre société.",
+        "model": PennylaneError,
+        "description": "Unknown resource, or belonging to another company.",
     },
     422: {
-        "model": ErreurPennylane,
+        "model": PennylaneError,
         "description": (
-            "Règle métier violée. Sur un changelog : `start_date` au-delà de la "
-            "rétention de quatre semaines."
+            "Business rule violated. On a changelog: `start_date` beyond the "
+            "four-week retention window."
         ),
     },
     429: {
         "description": (
-            "Limite de débit atteinte — 25 requêtes / 5 s au jeton. "
-            "**Le corps est du TEXTE BRUT, pas du JSON** ; en-tête `retry-after`. "
-            "Les en-têtes `ratelimit-*` sont présents sur TOUTES les réponses."
+            "Rate limit reached — 25 requests / 5 s per token. "
+            "**The body is PLAIN TEXT, not JSON**; `retry-after` header. "
+            "The `ratelimit-*` headers are present on ALL responses."
         ),
         "content": {"text/plain": {"schema": {"type": "string"}}},
     },
-    500: {"model": ErreurPennylane, "description": "Panne injectée."},
-    503: {"model": ErreurPennylane, "description": "Panne transitoire injectée."},
+    500: {"model": PennylaneError, "description": "Injected failure."},
+    503: {"model": PennylaneError, "description": "Injected transient failure."},
 }

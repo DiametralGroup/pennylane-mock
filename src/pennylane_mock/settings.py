@@ -1,13 +1,13 @@
-"""Configuration — tout par variables d'environnement, aucun fichier.
+"""Configuration — everything via environment variables, no file.
 
-Même mécanique que les quatre autres mocks de l'écosystème : un objet relu à
-chaud par `reload()`, pour qu'un test puisse changer une valeur sans recharger
-le module. C'est aussi le seul mécanisme qui marche identiquement en docker
-compose, en Deployment Kubernetes et en service GitHub Actions.
+Same mechanism as the ecosystem's four other mocks: an object reread on the
+fly by `reload()`, so a test can change a value without reloading the
+module. It's also the only mechanism that works identically in docker
+compose, a Kubernetes Deployment and a GitHub Actions service.
 
-Le préfixe est `PENNYLANE_MOCK_*`. Il n'y a délibérément AUCUN `.env.example`
-ici : le fichier d'exemple vit chez le consommateur (insights360), parce que
-c'est lui qui doit documenter comment brancher les cinq sources ensemble.
+The prefix is `PENNYLANE_MOCK_*`. There is deliberately NO `.env.example`
+here: the example file lives with the consumer (insights360), because it's
+the one that has to document how to wire the five sources together.
 """
 
 from __future__ import annotations
@@ -15,18 +15,18 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-#: Le jeton par défaut. Statique — Pennylane délivre des jetons de compagnie
-#: longue durée, pas des jetons de session (cf. docs/EXTRACTION.md §auth).
-JETON_DEFAUT = "mock-pennylane-token"
+#: The default token. Static — Pennylane issues long-lived company tokens,
+#: not session tokens (cf. docs/EXTRACTION.md §auth).
+DEFAULT_TOKEN = "mock-pennylane-token"
 
-#: Les scopes en lecture de TOUTE la surface v2, relevés sur
-#: https://pennylane.readme.io/docs/v2-scopes (état 2026-03-31). C'est le
-#: périmètre par défaut du mock : un consommateur en lecture les a tous.
+#: The read scopes for the ENTIRE v2 surface, taken from
+#: https://pennylane.readme.io/docs/v2-scopes (as of 2026-03-31). This is the
+#: mock's default scope set: a read-only consumer has all of them.
 #:
-#: `ledger` n'a PAS de variante `:readonly` chez le fournisseur — c'est un
-#: scope read/write unique, et c'est ce qui rend l'accès aux pièces jointes
-#: d'écriture comptable plus large que le reste. On le reproduit tel quel.
-SCOPES_LECTURE: tuple[str, ...] = (
+#: `ledger` has NO `:readonly` variant at the provider — it's a single
+#: read/write scope, and that's what makes access to accounting-entry
+#: attachments broader than everything else. Reproduced as-is.
+READ_SCOPES: tuple[str, ...] = (
     # SALES
     "customers:readonly",
     "products:readonly",
@@ -45,10 +45,10 @@ SCOPES_LECTURE: tuple[str, ...] = (
     "trial_balance:readonly",
     "exports:fec",
     "exports:agl",
-    # ⚠️ `exports:gl` n'est PAS listé par la page « Understand Scopes » (état
-    # 2026-03-31), qui ne connaît que `exports:fec` et `exports:agl`. La
-    # référence de `exportGeneralLedger`, elle, l'exige explicitement. La page
-    # de guide est donc incomplète — cf. docs/UNVERIFIED-FIELDS.md.
+    # WARNING: `exports:gl` is NOT listed on the "Understand Scopes" page (as
+    # of 2026-03-31), which only knows `exports:fec` and `exports:agl`. The
+    # `exportGeneralLedger` reference, though, explicitly requires it. The
+    # guide page is therefore incomplete — cf. docs/UNVERIFIED-FIELDS.md.
     "exports:gl",
     "fiscal_years:readonly",
     "journals:readonly",
@@ -74,100 +74,98 @@ def _flag(name: str, default: bool) -> bool:
 
 @dataclass
 class Settings:
-    """État de configuration, relu à chaud par `reload()`."""
+    """Configuration state, reread on the fly by `reload()`."""
 
     token: str = ""
 
-    #: Scopes portés par le jeton. Le levier « 403 » du mock : retirer un scope
-    #: reproduit un jeton à périmètre restreint, exactement comme chez le
-    #: fournisseur — et c'est la panne la plus fréquente en intégration réelle.
+    #: Scopes carried by the token. The mock's "403" lever: removing a scope
+    #: reproduces a token with a restricted scope set, exactly as at the
+    #: provider — and it's the most frequent failure in real integrations.
     scopes: frozenset[str] = frozenset()
 
     seed: int = 42
 
-    # Plan de contrôle /__admin. Fermé par défaut : il n'a de sens qu'en test.
+    # /__admin control plane. Closed by default: it only makes sense in test.
     admin_enabled: bool = False
     admin_token: str = "mock-admin-token"
 
     # ── Pagination ───────────────────────────────────────────────────────────
-    # Défaut 20 partout. Le PLAFOND, lui, n'est pas le même selon l'endpoint —
-    # 100 sur les listes ordinaires, 1000 sur les changelogs — et l'OpenAPI le
-    # déclare bien ainsi, endpoint par endpoint. Deux réglages, donc.
+    # Default of 20 everywhere. The CEILING, though, isn't the same across
+    # endpoints — 100 on ordinary lists, 1000 on changelogs — and the OpenAPI
+    # declares it that way, endpoint by endpoint. Hence two settings.
     #
-    # `limit` hors bornes rend 400 : il n'est PAS raboté en silence. Un plafond
-    # silencieux fait croire à un pipeline qu'il a demandé 5000 lignes et tout
-    # reçu, alors qu'il en a lu 100 — c'est le défaut le plus coûteux d'une
-    # pagination, parce qu'il ne se voit nulle part.
-    limite_defaut: int = 20
-    limite_max: int = 100
-    limite_max_changelog: int = 1000
+    # An out-of-bounds `limit` renders 400: it is NOT silently clamped. A
+    # silent cap would make a pipeline believe it requested 5000 rows and got
+    # them all, when it actually read 100 — the costliest pagination default,
+    # because it shows up nowhere.
+    default_limit: int = 20
+    max_limit: int = 100
+    max_limit_changelog: int = 1000
 
-    #: Limite de débit — 25 requêtes / 5 s au jeton, en vigueur sur TOUS les
-    #: endpoints (production comme bac à sable). Les en-têtes `ratelimit-*`
-    #: partent sur chaque réponse, pas seulement sur les 429.
+    #: Rate limit — 25 requests / 5 s per token, in force on ALL endpoints
+    #: (production as well as the sandbox). The `ratelimit-*` headers go out
+    #: on every response, not just on 429s.
     rate_limit: int = 25
     rate_window: float = 5.0
     rate_limit_enforced: bool = False
 
-    #: L'identité rendue par /me.
+    #: The identity returned by /me.
     company_name: str = "Boréal Conseil"
     company_id: int = 918_244
     company_reg_no: str = "824419236"
 
-    # ── Évolution temporelle (extraction incrémentale) ───────────────────────
-    # Le jeu de données VIT : un événement scripté toutes les
-    # `evolution_interval` secondes (facture émise, transaction rapprochée,
-    # écriture passée…), chacun inscrit au changelog. Mettre à false — ou
-    # l'intervalle à 0 — fige le jeu de données pour les usages qui exigent un
-    # contenu stable à l'octet près (le gate d'idempotence d'insights360).
+    # ── Temporal evolution (incremental extraction) ──────────────────────────
+    # The dataset LIVES: a scripted event every `evolution_interval` seconds
+    # (invoice issued, transaction reconciled, entry posted…), each logged to
+    # the changelog. Setting this to false — or the interval to 0 — freezes
+    # the dataset for uses that require byte-for-byte stable content
+    # (insights360's idempotence gate).
     evolution_enabled: bool = True
     evolution_interval: float = 60.0
 
-    #: Rétention du changelog, en jours. Le fournisseur retient 4 semaines et
-    #: REFUSE une `start_date` plus ancienne — c'est une contrainte que le
-    #: consommateur doit rencontrer en test, pas en production.
+    #: Changelog retention, in days. The provider retains 4 weeks and REFUSES
+    #: an older `start_date` — this is a constraint the consumer must hit in
+    #: test, not in production.
     changelog_retention_days: int = 28
 
-    #: Sert les champs FACULTATIFS que le locataire réel ne renseigne jamais.
+    #: Serves the OPTIONAL fields that the real tenant never fills in.
     #:
-    #: ┌─ POURQUOI LE DÉFAUT EST « NON » ────────────────────────────────────┐
-    #: │ `analytical_code` (catégories et ventilations), `product` (ligne de │
-    #: │ facture client) et `ledger_account` (ligne de facture fournisseur)  │
-    #: │ sont déclarés par l'OpenAPI, servis par l'API — et `null` sur 100 % │
-    #: │ des lignes du locataire relevé le 2026-09-07 : 0 code analytique    │
-    #: │ sur 159 catégories, aucun produit sur 1 898 factures client, aucun  │
-    #: │ compte sur 4 559 factures fournisseur.                              │
+    #: ┌─ WHY THE DEFAULT IS "NO" ────────────────────────────────────────────┐
+    #: │ `analytical_code` (categories and allocations), `product` (customer │
+    #: │ invoice line) and `ledger_account` (supplier invoice line) are      │
+    #: │ declared by the OpenAPI, served by the API — and `null` on 100% of  │
+    #: │ the rows of the tenant checked on 2026-09-07: 0 analytical codes    │
+    #: │ across 159 categories, no product on 1,898 customer invoices, no    │
+    #: │ account on 4,559 supplier invoices.                                 │
     #: │                                                                      │
-    #: │ Le mock les remplissait TOUJOURS. Un consommateur qui les lit était │
-    #: │ donc vert en développement et rouge en production — et pas d'un     │
-    #: │ « valeur nulle » mais d'un « column does not exist », parce qu'un   │
-    #: │ chargeur qui infère son schéma ne matérialise pas une colonne dont  │
-    #: │ il n'a jamais vu de valeur. C'est arrivé, et c'est ce que ce défaut │
-    #: │ existe pour reproduire.                                             │
+    #: │ The mock ALWAYS filled them in. A consumer reading them was          │
+    #: │ therefore green in development and red in production — and not     │
+    #: │ from a "null value" but from a "column does not exist", because a   │
+    #: │ loader that infers its schema doesn't materialize a column it never │
+    #: │ saw a value for. That happened, and this default exists to          │
+    #: │ reproduce it.                                                       │
     #: │                                                                      │
-    #: │ Mettre à `1` restaure la forme riche : elle reste légitime, un      │
-    #: │ autre locataire peut très bien renseigner ces trois champs.          │
+    #: │ Setting it to `1` restores the rich form: it remains legitimate,    │
+    #: │ another tenant may very well fill in these three fields.            │
     #: └──────────────────────────────────────────────────────────────────────┘
-    champs_facultatifs_servis: bool = False
+    optional_fields_served: bool = False
 
     extra: dict[str, str] = field(default_factory=dict)
 
     def reload(self) -> None:
-        self.token = os.environ.get("PENNYLANE_MOCK_TOKEN", JETON_DEFAUT)
-        brut = os.environ.get("PENNYLANE_MOCK_SCOPES")
+        self.token = os.environ.get("PENNYLANE_MOCK_TOKEN", DEFAULT_TOKEN)
+        raw = os.environ.get("PENNYLANE_MOCK_SCOPES")
         self.scopes = (
-            frozenset(SCOPES_LECTURE)
-            if brut is None
-            else frozenset(s.strip() for s in brut.split(",") if s.strip())
+            frozenset(READ_SCOPES)
+            if raw is None
+            else frozenset(s.strip() for s in raw.split(",") if s.strip())
         )
         self.seed = int(os.environ.get("PENNYLANE_MOCK_SEED", "42"))
         self.admin_enabled = _flag("PENNYLANE_MOCK_ADMIN_ENABLED", False)
         self.admin_token = os.environ.get("PENNYLANE_MOCK_ADMIN_TOKEN", "mock-admin-token")
-        self.limite_defaut = int(os.environ.get("PENNYLANE_MOCK_DEFAULT_LIMIT", "20"))
-        self.limite_max = int(os.environ.get("PENNYLANE_MOCK_MAX_LIMIT", "100"))
-        self.limite_max_changelog = int(
-            os.environ.get("PENNYLANE_MOCK_MAX_LIMIT_CHANGELOG", "1000")
-        )
+        self.default_limit = int(os.environ.get("PENNYLANE_MOCK_DEFAULT_LIMIT", "20"))
+        self.max_limit = int(os.environ.get("PENNYLANE_MOCK_MAX_LIMIT", "100"))
+        self.max_limit_changelog = int(os.environ.get("PENNYLANE_MOCK_MAX_LIMIT_CHANGELOG", "1000"))
         self.rate_limit = int(os.environ.get("PENNYLANE_MOCK_RATE_LIMIT", "25"))
         self.rate_window = float(os.environ.get("PENNYLANE_MOCK_RATE_WINDOW", "5"))
         self.rate_limit_enforced = _flag("PENNYLANE_MOCK_RATE_LIMIT_ENFORCED", False)
@@ -179,7 +177,7 @@ class Settings:
         self.changelog_retention_days = int(
             os.environ.get("PENNYLANE_MOCK_CHANGELOG_RETENTION_DAYS", "28")
         )
-        self.champs_facultatifs_servis = _flag("PENNYLANE_MOCK_OPTIONAL_FIELDS", False)
+        self.optional_fields_served = _flag("PENNYLANE_MOCK_OPTIONAL_FIELDS", False)
 
 
 settings = Settings()

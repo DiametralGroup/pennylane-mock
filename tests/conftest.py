@@ -1,13 +1,13 @@
-"""Harnais de tests.
+"""Test harness.
 
-Deux réglages d'environnement, posés AVANT l'import du paquet (la configuration
-est lue à l'import) :
+Two environment settings, set BEFORE importing the package (configuration is
+read at import time):
 
-  • le plan de contrôle `/__admin` est monté — le montage est conditionnel ;
-  • l'intervalle d'évolution passe à 3600 s : aucun événement ne se déclenche au
-    fil de l'horloge murale pendant la suite, même sur une CI lente. Les tests
-    d'évolution font défiler le temps EXPLICITEMENT via `/__admin/clock` ou
-    `/__admin/evolve` — c'est ce qui les rend déterministes.
+  * the control plane `/__admin` is mounted — the mounting is conditional;
+  * the evolution interval is pushed to 3600 s: no event fires on wall-clock
+    time during the suite, even on a slow CI. Evolution tests advance time
+    EXPLICITLY via `/__admin/clock` or `/__admin/evolve` — that's what makes
+    them deterministic.
 """
 
 from __future__ import annotations
@@ -24,17 +24,17 @@ import pennylane_mock as mock
 
 BASE = "/api/external/v2"
 
-#: Le trousseau d'une requête bien formée. Un seul en-tête — c'est le régime
-#: d'authentification le plus simple des cinq mocks de l'écosystème.
+#: The credentials of a well-formed request. A single header — this is the
+#: simplest authentication scheme of the five mocks in the ecosystem.
 H = {"Authorization": "Bearer mock-pennylane-token"}
 ADMIN = {"X-Mock-Admin-Token": "mock-admin-token"}
 
 
 @pytest.fixture()
 def client():
-    """Un client sur un état REMIS À NEUF — avant ET après, pour qu'un test ne
-    lègue ni règle d'injection, ni événement d'évolution, ni scope amputé au
-    suivant."""
+    """A client on a FRESHLY RESET state — before AND after, so that one test
+    hands down neither an injection rule, nor an evolution event, nor an
+    amputated scope to the next."""
     c = TestClient(mock.app)
     mock.settings.reload()
     mock.state.reset()
@@ -44,18 +44,18 @@ def client():
 
 
 @pytest.fixture()
-def donnees(client):  # noqa: ARG001 — la fixture chaîne le reset
-    """Le jeu de données, pour les tests qui l'inspectent directement."""
+def donnees(client):  # noqa: ARG001 — the fixture chains the reset
+    """The dataset, for tests that inspect it directly."""
     return mock.state.dataset
 
 
 def tout_paginer(client, chemin: str, limite: int = 7) -> list[dict]:
-    """Le parcours de pagination complet — l'outil des tests de bout en bout.
+    """The full pagination walk — the end-to-end tests' tool.
 
-    Il REJOUE le filtre à chaque page, comme la documentation l'exige, et
-    s'arrête sur `has_more` faux et non sur une page courte : c'est la règle du
-    dialecte, et un helper qui prendrait le raccourci masquerait justement le
-    défaut qu'on cherche.
+    It REPLAYS the filter on every page, as the documentation requires, and
+    stops on a false `has_more`, not on a short page: that's the dialect's
+    rule, and a helper that took the shortcut would mask precisely the defect
+    being sought.
     """
     separateur = "&" if "?" in chemin else "?"
     elements: list[dict] = []
@@ -69,4 +69,4 @@ def tout_paginer(client, chemin: str, limite: int = 7) -> list[dict]:
         if not corps["has_more"]:
             return elements
         curseur = corps["next_cursor"]
-    raise AssertionError(f"pagination non terminée après 200 pages sur {chemin}")
+    raise AssertionError(f"pagination did not finish after 200 pages on {chemin}")

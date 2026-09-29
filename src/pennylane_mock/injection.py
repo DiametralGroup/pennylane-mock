@@ -1,23 +1,24 @@
-"""Injection de pannes — le vrai intérêt d'un mock.
+"""Failure injection — the real point of a mock.
 
-« The point of the mock is to reproduce failure modes, not just happy paths »
-(spec insights360, §4.1). Des règles déclaratives, pilotables par HTTP via
-`/__admin`, parce que le mock tourne en CONTENEUR chez le consommateur : hors
-du processus, on ne peut plus muter l'état en Python.
+"The point of the mock is to reproduce failure modes, not just happy paths"
+(insights360 spec, §4.1). Declarative rules, drivable over HTTP via
+`/__admin`, because the mock runs in a CONTAINER at the consumer's side:
+outside the process, state can no longer be mutated in Python.
 
-Un SEUL point de dispatch, ordonné, évalué AVANT l'authentification, pour que
-`auth_reject` puisse préempter. Chaque règle porte un compteur `times`
-optionnel : une panne « transitoire » doit cesser d'elle-même, sinon on ne
-teste pas un retry, on teste un échec.
+A SINGLE dispatch point, ordered, evaluated BEFORE authentication, so that
+`auth_reject` can preempt it. Each rule carries an optional `times` counter:
+a "transient" failure must stop on its own, otherwise you're not testing a
+retry, you're testing a failure.
 
-┌─ LES DEUX KINDS PROPRES À PENNYLANE ────────────────────────────────────────┐
-│ `scope_reject`  — force un 403 « Access to this resource requires scope      │
-│                   "x". » sur un périmètre donné. C'est la panne la plus      │
-│                   fréquente en intégration réelle (un jeton régénéré sans    │
-│                   une case cochée), et la seule qui NOMME sa cause.          │
-│ `rate_limit`    — 429 à corps TEXTE, en-tête `retry-after`, et les en-têtes  │
-│                   `ratelimit-*` qui, eux, partent sur toutes les réponses.   │
-│                   Un client qui appelle `.json()` sur le 429 casse ici.      │
+┌─ THE TWO KINDS SPECIFIC TO PENNYLANE ───────────────────────────────────────┐
+│ `scope_reject`  — forces a 403 "Access to this resource requires scope       │
+│                   \"x\"." on a given scope. The most frequent failure in     │
+│                   real integrations (a token regenerated without a box       │
+│                   checked), and the only one that NAMES its cause.           │
+│ `rate_limit`    — 429 with a TEXT body, `retry-after` header, and the       │
+│                   `ratelimit-*` headers, which themselves go out on every    │
+│                   response. A client that calls `.json()` on the 429        │
+│                   breaks here.                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
@@ -41,19 +42,20 @@ Kind = Literal[
 
 @dataclass
 class Rule:
-    """Une règle d'injection.
+    """An injection rule.
 
-    `scope` est un motif glob sur le chemin (`/api/external/v2/customer_invoices`,
-    `/api/external/v2/*`, `*`), ce qui permet de viser une ressource précise
-    sans énumérer ses routes.
+    `scope` is a glob pattern on the path (`/api/external/v2/customer_invoices`,
+    `/api/external/v2/*`, `*`), which lets a specific resource be targeted
+    without enumerating its routes.
     """
 
     id: str
     kind: Kind
     scope: str = "*"
-    #: Applications restantes. None = illimité. C'est ce qui fait la différence
-    #: entre une panne transitoire (que le retry doit absorber) et une panne
-    #: persistante (qui doit faire échouer le run avec un code non nul).
+    #: Remaining applications. None = unlimited. This is what makes the
+    #: difference between a transient failure (that a retry must absorb) and
+    #: a persistent failure (that must make the run fail with a non-zero
+    #: exit code).
     times: int | None = None
 
     # rate_limit
@@ -67,7 +69,7 @@ class Rule:
     after_page: int = 1
     mode: Literal["insert", "remove"] = "insert"
     # scope_reject
-    scope_manquant: str = "customer_invoices:readonly"
+    missing_scope: str = "customer_invoices:readonly"
 
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -75,7 +77,7 @@ class Rule:
         return fnmatch.fnmatch(path, self.scope)
 
     def consume(self) -> bool:
-        """Décrémente le compteur. Rend False quand la règle est épuisée."""
+        """Decrements the counter. Returns False once the rule is exhausted."""
         if self.times is None:
             return True
         if self.times <= 0:
@@ -85,19 +87,19 @@ class Rule:
 
 
 class InjectionEngine:
-    """Le moteur, et le compteur de requêtes par chemin dont il dépend."""
+    """The engine, and the per-path request counter it depends on."""
 
     def __init__(self) -> None:
         self.rules: list[Rule] = []
         self.request_counts: dict[str, int] = {}
         self.last_query_params: dict[str, dict[str, str]] = {}
         self._next_id = 1
-        # Horloge virtuelle : permet d'éprouver des fenêtres temporelles (la
-        # rétention de 4 semaines du changelog, l'évolution du jeu de données)
-        # sans `sleep`, donc sans rendre la suite lente ni dépendante du timing.
+        # Virtual clock: lets time windows be exercised (the changelog's
+        # four-week retention, dataset evolution) without `sleep`, so
+        # without making the suite slow or timing-dependent.
         self.clock_offset: float = 0.0
 
-    # ── Gestion des règles ───────────────────────────────────────────────────
+    # ── Rule management ──────────────────────────────────────────────────────
 
     def add(self, **kwargs: Any) -> Rule:
         rule = Rule(id=f"r{self._next_id}", **kwargs)
@@ -121,13 +123,13 @@ class InjectionEngine:
     # ── Observation ──────────────────────────────────────────────────────────
 
     def observe(self, path: str, params: dict[str, str]) -> int:
-        """Enregistre le passage d'une requête et rend son rang (1-based).
+        """Records a request's passage and returns its rank (1-based).
 
-        `last_query_params` est porteur : c'est ce qui permet à un consommateur
-        de PROUVER qu'il a bien envoyé son `cursor`, son `filter` et sa
-        `start_date`, au lieu de simplement tolérer leur absence. Un pipeline
-        qui aurait oublié son curseur passerait sinon tous ses tests — il
-        rechargerait la première page à chaque fois, sans que rien ne le dise.
+        `last_query_params` carries its weight: it's what lets a consumer
+        PROVE it really sent its `cursor`, its `filter` and its
+        `start_date`, instead of merely tolerating their absence. A pipeline
+        that forgot its cursor would otherwise pass all its tests — it would
+        just reload the first page every time, with nothing to say so.
         """
         self.request_counts[path] = self.request_counts.get(path, 0) + 1
         self.last_query_params[path] = dict(params)
@@ -139,7 +141,7 @@ class InjectionEngine:
     # ── Dispatch ─────────────────────────────────────────────────────────────
 
     def first(self, kind: Kind, path: str) -> Rule | None:
-        """Première règle active du type demandé pour ce chemin."""
+        """First active rule of the requested kind for this path."""
         for rule in self.rules:
             if rule.kind == kind and rule.matches(path):
                 if rule.times is not None and rule.times <= 0:
@@ -155,30 +157,30 @@ class InjectionEngine:
                 "scope": r.scope,
                 "times_left": r.times,
                 **{
-                    champ: valeur
-                    for champ, valeur in (
+                    field: value
+                    for field, value in (
                         ("after_requests", r.after_requests),
                         ("retry_after_seconds", r.retry_after_seconds),
                         ("status", r.status),
                         ("seconds", r.seconds),
                         ("after_page", r.after_page),
                         ("mode", r.mode),
-                        ("scope_manquant", r.scope_manquant),
+                        ("missing_scope", r.missing_scope),
                     )
-                    if champ in _CHAMPS_PAR_KIND.get(r.kind, frozenset())
+                    if field in _FIELDS_BY_KIND.get(r.kind, frozenset())
                 },
             }
             for r in self.rules
         ]
 
 
-_CHAMPS_PAR_KIND: dict[str, frozenset[str]] = {
+_FIELDS_BY_KIND: dict[str, frozenset[str]] = {
     "rate_limit": frozenset({"after_requests", "retry_after_seconds"}),
     "status": frozenset({"status"}),
     "latency": frozenset({"seconds"}),
     "page_drift": frozenset({"after_page", "mode"}),
     "auth_reject": frozenset({"status"}),
-    "scope_reject": frozenset({"scope_manquant"}),
+    "scope_reject": frozenset({"missing_scope"}),
     "cursor_reject": frozenset(),
 }
 

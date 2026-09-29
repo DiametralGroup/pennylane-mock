@@ -85,7 +85,7 @@ Python.
 ## Served surface
 
 All **91 GET operations**, mounted from a declarative table
-(`RESSOURCES` / `SOUS_RESSOURCES` / `CHANGELOGS` in `app.py`) rather than 91
+(`RESOURCES` / `SUB_RESOURCES` / `CHANGELOGS` in `app.py`) rather than 91
 hand-written handlers. Every route goes through the same prelude —
 *evolution → observation → injections → token → scope* — so no route can escape
 a scope check or a failure rule.
@@ -138,7 +138,7 @@ Three fields are declared by the OpenAPI, served by the API — and `null` on
 
 | Field | Where | Observed |
 |---|---|---|
-| `analytical_code` | `Categorie`, and the ventilation copy on entries, entry lines and transactions | `null` on 159 categories out of 159 |
+| `analytical_code` | `Category`, and the ventilation copy on entries, entry lines and transactions | `null` on 159 categories out of 159 |
 | `product` | customer invoice line | not one of 1 898 invoices fills it |
 | `ledger_account` | supplier invoice line | not one of 4 559 |
 
@@ -252,7 +252,7 @@ curl -H "$A" -X POST $BASE/__admin/inject \
 # The most common real-world integration failure: a token regenerated with one
 # checkbox missing.
 curl -H "$A" -X POST $BASE/__admin/inject \
-  -d '{"kind":"scope_reject","scope":"/api/external/v2/transactions","scope_manquant":"transactions:readonly"}'
+  -d '{"kind":"scope_reject","scope":"/api/external/v2/transactions","missing_scope":"transactions:readonly"}'
 ```
 
 Kinds: `rate_limit`, `status`, `latency`, `page_drift`, `auth_reject`,
@@ -271,7 +271,7 @@ Closed by default; when disabled the surface **does not exist** (it is not
 | `GET /__admin/state` | seed, totals, `request_counts_by_path`, **`last_query_params_by_path`**, injections, clock offset, evolution log |
 | `POST /__admin/inject` · `DELETE /__admin/inject/{id}` · `POST /__admin/inject/clear` | failure rules |
 | `POST /__admin/clock` | `{"advance_seconds": 3600}` — time windows **without `sleep`** |
-| `POST /__admin/evolve` | `{"pas": 5}` — force N evolution events, clock untouched |
+| `POST /__admin/evolve` | `{"steps": 5}` — force N evolution events, clock untouched |
 | `POST /__admin/mutate` | edit an entity and push its `updated_at` above every other |
 | `POST /__admin/scopes` | redefine the token's scopes — the 403 lever |
 

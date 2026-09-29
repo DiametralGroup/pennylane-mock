@@ -33,11 +33,11 @@ up:          ## Run the mock in a container (docker compose up --build)
 	docker compose up --build
 
 contract:    ## Regenerate contracts/pennylane.openapi.yaml from the app
-	@# `contrat_openapi()` rather than `app.openapi()`: the contract describes the
+	@# `openapi_contract()` rather than `app.openapi()`: the contract describes the
 	@# PENNYLANE dialect. /__admin and /health are mock affordances — publishing
 	@# them would pass off as vendor API what is not, and /__admin is only mounted
 	@# conditionally, which would make the contract depend on the generation
 	@# environment.
 	$(UV) run python -c "import yaml, pennylane_mock as m; \
-open('contracts/pennylane.openapi.yaml','w').write(yaml.safe_dump(m.contrat_openapi(), sort_keys=False, allow_unicode=True))"
+open('contracts/pennylane.openapi.yaml','w').write(yaml.safe_dump(m.openapi_contract(), sort_keys=False, allow_unicode=True))"
 	@echo "✓ contract regenerated — REVIEW the diff: a changed response shape is a contract change for consumers"

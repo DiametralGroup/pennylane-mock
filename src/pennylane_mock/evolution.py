@@ -1,31 +1,31 @@
-"""L'évolution du jeu de données dans le temps — pour l'extraction incrémentale.
+"""Dataset evolution over time — for incremental extraction.
 
-Le monde VIT : un événement scripté par intervalle (60 s par défaut). C'est ce
-qui rend éprouvable la seule propriété qui compte pour un connecteur
-incrémental — « une deuxième extraction ne recharge QUE ce qui a bougé » — et
-qui permet de vérifier qu'il envoie réellement sa `start_date` au lieu de
-recharger l'univers à chaque passage.
+The world LIVES: a scripted event per interval (60 s by default). This is
+what makes the one property that matters for an incremental connector
+testable — "a second extraction only reloads what changed" — and lets us
+verify that it really sends its `start_date` instead of reloading the whole
+universe on every pass.
 
-┌─ DÉTERMINISME ──────────────────────────────────────────────────────────────┐
-│ L'événement k tire son aléa de `Random(f"{seed}:{k}")` et son horodatage     │
-│ vaut TOUJOURS `EPOQUE + (k+1) x intervalle`. Deux exécutions du même mock,   │
-│ avancées du même nombre d'événements, produisent le même monde — sans quoi   │
-│ un test d'incrémentalité ne serait pas rejouable.                            │
+┌─ DETERMINISM ────────────────────────────────────────────────────────────────┐
+│ Event k draws its randomness from `Random(f"{seed}:{k}")` and its           │
+│ timestamp is ALWAYS `EPOCH + (k+1) x interval`. Two runs of the same mock,  │
+│ advanced by the same number of events, produce the same world — without    │
+│ which an incrementality test wouldn't be replayable.                       │
 │                                                                              │
-│ `avancer()` est idempotent et protégé par un verrou : les handlers FastAPI   │
-│ tournent dans un pool de threads, et deux requêtes simultanées feraient      │
-│ sinon avancer la chronologie deux fois pour le même pas.                     │
+│ `advance()` is idempotent and lock-protected: FastAPI handlers run in a     │
+│ thread pool, and two simultaneous requests would otherwise advance the      │
+│ timeline twice for the same step.                                          │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-┌─ L'INVARIANT COMPTABLE TIENT AUSSI PENDANT L'ÉVOLUTION ─────────────────────┐
-│ Chaque événement qui crée un flux passe une écriture ÉQUILIBRÉE. La balance  │
-│ d'un mock qu'on a laissé tourner une heure doit toujours équilibrer — sinon  │
-│ le mock finit par servir une comptabilité fausse, ce qui est pire que de ne  │
-│ rien servir.                                                                 │
+┌─ THE ACCOUNTING INVARIANT ALSO HOLDS DURING EVOLUTION ──────────────────────┐
+│ Every event that creates a flow posts a BALANCED entry. The trial balance   │
+│ of a mock left running for an hour must always balance — otherwise the     │
+│ mock ends up serving false accounting data, which is worse than serving     │
+│ none at all.                                                                │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-Pour figer le monde — le gate d'idempotence d'insights360 compare `raw` entre
-deux exécutions et ne peut pas vivre avec un jeu qui bouge — poser
+To freeze the world — insights360's idempotence gate compares `raw` between
+two runs and can't live with a moving dataset — set
 `PENNYLANE_MOCK_EVOLUTION_ENABLED=false`.
 """
 
@@ -49,218 +49,217 @@ from .dataset.realiste import (
 )
 from .settings import settings
 
-#: L'origine de la chronologie. Postérieure à `DERNIERE_MAJ` du jeu de base
-#: (2026-07-12) : un curseur posé sur le jeu de base rend zéro ligne, et le
-#: PREMIER événement d'évolution est le premier changement qu'il verra.
+#: The origin of the timeline. Later than the base dataset's `DERNIERE_MAJ`
+#: (2026-07-12): a cursor set on the base dataset returns zero rows, and the
+#: FIRST evolution event is the first change it will see.
 EPOQUE = datetime(2026, 7, 15, 9, 0, 0, tzinfo=UTC)
 
-#: Le cycle des événements. Six pas, puis on recommence — mais les entités
-#: touchées, elles, avancent : le septième événement n'est pas le premier.
+#: The event cycle. Six steps, then it starts over — but the affected
+#: entities keep advancing: the seventh event isn't the first one again.
 CYCLE: tuple[str, ...] = (
-    "maj_facture_client",
-    "reglement_client",
-    "nouvelle_facture_client",
-    "maj_client",
-    "facture_fournisseur",
-    "transaction_orpheline",
+    "customer_invoice_update",
+    "customer_payment",
+    "new_customer_invoice",
+    "customer_update",
+    "supplier_invoice",
+    "orphan_transaction",
 )
 
 
-def _horodatage(quand: datetime) -> str:
-    return quand.strftime("%Y-%m-%dT%H:%M:%S.") + f"{quand.microsecond:06d}Z"
+def _timestamp(when: datetime) -> str:
+    return when.strftime("%Y-%m-%dT%H:%M:%S.") + f"{when.microsecond:06d}Z"
 
 
 class Evolution:
-    """La chronologie. `avancer()` la fait progresser jusqu'à l'instant donné."""
+    """The timeline. `advance()` moves it forward to the given instant."""
 
-    def __init__(self, seed: int, depart: float) -> None:
+    def __init__(self, seed: int, start: float) -> None:
         self.seed = seed
-        self.depart = depart
-        self.rang = 0
-        self.journal: list[dict[str, Any]] = []
-        self._verrou = threading.Lock()
+        self.start = start
+        self.rank = 0
+        self.log: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
 
     # ── Progression ──────────────────────────────────────────────────────────
 
-    def pas_attendus(self, maintenant: float) -> int:
+    def steps_due(self, now: float) -> int:
         if not settings.evolution_enabled or settings.evolution_interval <= 0:
             return 0
-        ecoule = max(0.0, maintenant - self.depart)
-        return int(ecoule // settings.evolution_interval)
+        elapsed = max(0.0, now - self.start)
+        return int(elapsed // settings.evolution_interval)
 
-    def avancer(self, donnees: dict[str, Any], maintenant: float) -> bool:
-        """Applique les événements dus. Rend True si le monde a bougé."""
-        with self._verrou:
-            cible = self.pas_attendus(maintenant)
-            if cible <= self.rang:
+    def advance(self, data: dict[str, Any], now: float) -> bool:
+        """Applies the events that are due. Returns True if the world moved."""
+        with self._lock:
+            target = self.steps_due(now)
+            if target <= self.rank:
                 return False
-            for k in range(self.rang, cible):
-                self._appliquer(donnees, k)
-            self.rang = cible
+            for k in range(self.rank, target):
+                self._apply(data, k)
+            self.rank = target
             return True
 
-    def forcer(self, donnees: dict[str, Any], pas: int = 1) -> None:
-        """Avance de `pas` événements, quelle que soit l'horloge — le levier
-        de `/__admin/evolve`, pour un test qui ne veut pas manipuler le temps."""
-        with self._verrou:
-            for k in range(self.rang, self.rang + pas):
-                self._appliquer(donnees, k)
-            self.rang += pas
+    def force(self, data: dict[str, Any], steps: int = 1) -> None:
+        """Advances by `steps` events, regardless of the clock — the lever
+        behind `/__admin/evolve`, for a test that doesn't want to manipulate
+        time."""
+        with self._lock:
+            for k in range(self.rank, self.rank + steps):
+                self._apply(data, k)
+            self.rank += steps
 
-    # ── Les événements ───────────────────────────────────────────────────────
+    # ── The events ───────────────────────────────────────────────────────────
 
-    def _appliquer(self, donnees: dict[str, Any], k: int) -> None:
-        genre = CYCLE[k % len(CYCLE)]
+    def _apply(self, data: dict[str, Any], k: int) -> None:
+        kind = CYCLE[k % len(CYCLE)]
         rng = random.Random(f"{self.seed}:{k}")
-        quand = EPOQUE + timedelta(seconds=settings.evolution_interval * (k + 1))
-        horodatage = _horodatage(quand)
-        jour = quand.date()
+        when = EPOQUE + timedelta(seconds=settings.evolution_interval * (k + 1))
+        timestamp = _timestamp(when)
+        day = when.date()
 
-        applique = getattr(self, f"_evt_{genre}")
-        detail = applique(donnees, rng, horodatage, jour)
-        self.journal.append({"rang": k, "genre": genre, "at": horodatage, "detail": detail})
+        apply_event = getattr(self, f"_evt_{kind}")
+        detail = apply_event(data, rng, timestamp, day)
+        self.log.append({"rank": k, "kind": kind, "at": timestamp, "detail": detail})
 
-    # -- Un simple `updated_at` qui bouge : le cas le plus fréquent en réel ---
+    # -- A plain `updated_at` bump: the most frequent case in reality --------
 
-    def _evt_maj_facture_client(
-        self, donnees: dict[str, Any], rng: random.Random, horodatage: str, jour: date
+    def _evt_customer_invoice_update(
+        self, data: dict[str, Any], rng: random.Random, timestamp: str, day: date
     ) -> str:
-        del jour
-        candidates = [f for f in donnees["customer_invoices"] if not f["draft"]]
-        facture = candidates[rng.randrange(len(candidates))]
-        facture["updated_at"] = horodatage
-        facture["pdf_description"] = "Mention de relance ajoutée."
-        _changement(donnees, "customer_invoices", facture, "update", horodatage)
-        return f"customer_invoice:{facture['id']}"
+        del day
+        candidates = [f for f in data["customer_invoices"] if not f["draft"]]
+        invoice = candidates[rng.randrange(len(candidates))]
+        invoice["updated_at"] = timestamp
+        invoice["pdf_description"] = "Mention de relance ajoutée."
+        _change(data, "customer_invoices", invoice, "update", timestamp)
+        return f"customer_invoice:{invoice['id']}"
 
-    # -- Un encaissement : la facture passe à `paid`, une transaction naît ----
+    # -- A payment: the invoice becomes `paid`, a transaction is born --------
 
-    def _evt_reglement_client(
-        self, donnees: dict[str, Any], rng: random.Random, horodatage: str, jour: date
+    def _evt_customer_payment(
+        self, data: dict[str, Any], rng: random.Random, timestamp: str, day: date
     ) -> str:
-        impayees = [
+        unpaid = [
             f
-            for f in donnees["customer_invoices"]
+            for f in data["customer_invoices"]
             if not f["paid"] and not f["draft"] and f["status"] != "credit_note"
         ]
-        if not impayees:
-            return "aucune facture impayée"
-        facture = impayees[rng.randrange(len(impayees))]
-        client = next(c for c in donnees["customers"] if c["id"] == facture["customer"]["id"])
-        ttc = round(float(facture["amount"]) * 100)
-        grand = _grand_courant(donnees)
-        repere = len(grand.lignes)
-        compte_tiers = _compte_client(client)
-        libelle = f"VIR SEPA {client['name'].upper()} {facture['invoice_number']}"
-        ecriture = grand.passer(
+        if not unpaid:
+            return "no unpaid invoice"
+        invoice = unpaid[rng.randrange(len(unpaid))]
+        customer = next(c for c in data["customers"] if c["id"] == invoice["customer"]["id"])
+        total = round(float(invoice["amount"]) * 100)
+        ledger = _current_ledger(data)
+        mark = len(ledger.lignes)
+        counterparty_account = _customer_account(customer)
+        label = f"VIR SEPA {customer['name'].upper()} {invoice['invoice_number']}"
+        entry = ledger.passer(
             journal="BQ",
-            jour=jour,
-            libelle=libelle,
-            numero_piece=f"BQ-EVO-{ecriture_suivante(donnees):04d}",
-            mouvements=[("512000", ttc, libelle), (compte_tiers, -ttc, "Règlement")],
-            maj=horodatage,
+            jour=day,
+            libelle=label,
+            numero_piece=f"BQ-EVO-{next_ledger_entry(data):04d}",
+            mouvements=[("512000", total, label), (counterparty_account, -total, "Règlement")],
+            maj=timestamp,
         )
-        _absorber(donnees, grand, horodatage, repere)
-        if facture["ledger_entry"]:
-            grand.lettrer(facture["ledger_entry"]["id"], ecriture["id"], "")
+        _absorb(data, ledger, timestamp, mark)
+        if invoice["ledger_entry"]:
+            ledger.lettrer(invoice["ledger_entry"]["id"], entry["id"], "")
 
-        facture["paid"] = True
-        facture["status"] = "paid"
-        facture["remaining_amount_with_tax"] = "0.00"
-        facture["remaining_amount_without_tax"] = "0.00"
-        facture["updated_at"] = horodatage
-        _changement(donnees, "customer_invoices", facture, "update", horodatage)
+        invoice["paid"] = True
+        invoice["status"] = "paid"
+        invoice["remaining_amount_with_tax"] = "0.00"
+        invoice["remaining_amount_without_tax"] = "0.00"
+        invoice["updated_at"] = timestamp
+        _change(data, "customer_invoices", invoice, "update", timestamp)
 
         transaction = _transaction(
-            _prochain_id(donnees["transactions"]),
-            jour=jour,
-            libelle=libelle,
-            montant=ttc,
-            compte=donnees["bank_accounts"][0],
-            journal=next(j for j in donnees["journals"] if j["code"] == "BQ"),
-            tiers_client=_ref(client["id"], "/customers"),
+            _next_id(data["transactions"]),
+            jour=day,
+            libelle=label,
+            montant=total,
+            compte=data["bank_accounts"][0],
+            journal=next(j for j in data["journals"] if j["code"] == "BQ"),
+            tiers_client=_ref(customer["id"], "/customers"),
             tiers_fournisseur=None,
             reste=0,
             categories=[],
             rng=rng,
         )
-        transaction["created_at"] = transaction["updated_at"] = horodatage
-        donnees["transactions"].append(transaction)
-        donnees["matched_transactions_par_facture_client"].setdefault(facture["id"], []).append(
+        transaction["created_at"] = transaction["updated_at"] = timestamp
+        data["transactions"].append(transaction)
+        data["matched_transactions_par_facture_client"].setdefault(invoice["id"], []).append(
             transaction["id"]
         )
-        _changement(donnees, "transactions", transaction, "insert", horodatage)
-        _recaler_solde(donnees)
-        return f"customer_invoice:{facture['id']} → paid"
+        _change(data, "transactions", transaction, "insert", timestamp)
+        _rebalance_cash(data)
+        return f"customer_invoice:{invoice['id']} → paid"
 
-    # -- Une nouvelle facture : le cas qu'un curseur DOIT rapporter -----------
+    # -- A new invoice: the case a cursor MUST report -------------------------
 
-    def _evt_nouvelle_facture_client(
-        self, donnees: dict[str, Any], rng: random.Random, horodatage: str, jour: date
+    def _evt_new_customer_invoice(
+        self, data: dict[str, Any], rng: random.Random, timestamp: str, day: date
     ) -> str:
-        clients = [
-            c
-            for c in donnees["customers"]
-            if c["customer_type"] == "company" and c["notes"] is None
+        customers = [
+            c for c in data["customers"] if c["customer_type"] == "company" and c["notes"] is None
         ]
-        client = clients[rng.randrange(len(clients))]
-        produit = donnees["products"][rng.randrange(len(donnees["products"]))]
-        quantite = rng.randint(3, 12)
-        pu = round(float(produit["price_before_tax"]) * 100)
-        ht = pu * quantite
-        tva = ht * TVA // 100
-        ttc = ht + tva
-        ident = _prochain_id(donnees["customer_invoices"])
-        numero = f"FAC-2026-{ident:04d}"
+        customer = customers[rng.randrange(len(customers))]
+        product = data["products"][rng.randrange(len(data["products"]))]
+        quantity = rng.randint(3, 12)
+        unit_price = round(float(product["price_before_tax"]) * 100)
+        before_tax = unit_price * quantity
+        tax = before_tax * TVA // 100
+        total = before_tax + tax
+        ident = _next_id(data["customer_invoices"])
+        number = f"FAC-2026-{ident:04d}"
 
-        grand = _grand_courant(donnees)
-        repere = len(grand.lignes)
-        ecriture = grand.passer(
+        ledger = _current_ledger(data)
+        mark = len(ledger.lignes)
+        entry = ledger.passer(
             journal="VE",
-            jour=jour,
-            libelle=f"Facture {numero} — {client['name']}",
-            numero_piece=numero,
-            numero_facture=numero,
-            echeance=jour + timedelta(days=30),
-            categories=_categorie(donnees["categories"], "Paris"),
+            jour=day,
+            libelle=f"Facture {number} — {customer['name']}",
+            numero_piece=number,
+            numero_facture=number,
+            echeance=day + timedelta(days=30),
+            categories=_categorie(data["categories"], "Paris"),
             mouvements=[
-                (_compte_client(client), ttc, f"{client['name']} — {numero}"),
-                ("706000", -ht, "Prestations"),
-                ("445710", -tva, f"TVA collectée {TVA}%"),
+                (_customer_account(customer), total, f"{customer['name']} — {number}"),
+                ("706000", -before_tax, "Prestations"),
+                ("445710", -tax, f"TVA collectée {TVA}%"),
             ],
-            maj=horodatage,
+            maj=timestamp,
         )
-        _absorber(donnees, grand, horodatage, repere)
+        _absorb(data, ledger, timestamp, mark)
 
-        modele = donnees["customer_invoices"][0]
-        facture = {
-            **modele,
+        template = data["customer_invoices"][0]
+        invoice = {
+            **template,
             "id": ident,
-            "label": f"Prestations complémentaires — {produit['label']}",
-            "invoice_number": numero,
-            "amount": _euros(ttc),
-            "currency_amount": _euros(ttc),
-            "currency_amount_before_tax": _euros(ht),
-            "currency_tax": _euros(tva),
-            "tax": _euros(tva),
-            "date": _d(jour),
-            "deadline": _d(jour + timedelta(days=30)),
+            "label": f"Prestations complémentaires — {product['label']}",
+            "invoice_number": number,
+            "amount": _euros(total),
+            "currency_amount": _euros(total),
+            "currency_amount_before_tax": _euros(before_tax),
+            "currency_tax": _euros(tax),
+            "tax": _euros(tax),
+            "date": _d(day),
+            "deadline": _d(day + timedelta(days=30)),
             "paid": False,
             "status": "upcoming",
             "draft": False,
-            "ledger_entry": {"id": ecriture["id"]},
-            "remaining_amount_with_tax": _euros(ttc),
-            "remaining_amount_without_tax": _euros(ht),
-            "customer": _ref(client["id"], "/customers"),
+            "ledger_entry": {"id": entry["id"]},
+            "remaining_amount_with_tax": _euros(total),
+            "remaining_amount_without_tax": _euros(before_tax),
+            "customer": _ref(customer["id"], "/customers"),
             "credited_invoice": None,
-            "filename": f"{numero}.pdf",
-            "public_file_url": f"https://files.example/{numero}.pdf",
+            "filename": f"{number}.pdf",
+            "public_file_url": f"https://files.example/{number}.pdf",
             "external_reference": f"evolution:invoice:{ident}",
-            "created_at": horodatage,
-            "updated_at": horodatage,
+            "created_at": timestamp,
+            "updated_at": timestamp,
             **{
-                cle: _lien(f"/customer_invoices/{ident}/{cle}")
-                for cle in (
+                key: _lien(f"/customer_invoices/{ident}/{key}")
+                for key in (
                     "invoice_line_sections",
                     "invoice_lines",
                     "custom_header_fields",
@@ -271,187 +270,186 @@ class Evolution:
                 )
             },
         }
-        donnees["customer_invoices"].append(facture)
-        donnees["customer_invoice_lines"][ident] = [
+        data["customer_invoices"].append(invoice)
+        data["customer_invoice_lines"][ident] = [
             {
                 "id": ident * 100 + 1,
-                "label": produit["label"],
+                "label": product["label"],
                 "unit": "jour",
-                "quantity": str(quantite),
-                "amount": _euros(ttc),
-                "currency_amount": _euros(ttc),
-                "description": produit["description"],
-                # Même gommage qu'à la construction du jeu : ce que le mock
-                # SERT suit le fournisseur, qui ne renseigne jamais ce champ.
-                # Cf. `Settings.champs_facultatifs_servis`.
+                "quantity": str(quantity),
+                "amount": _euros(total),
+                "currency_amount": _euros(total),
+                "description": product["description"],
+                # Same scrubbing as at dataset build time: what the mock
+                # SERVES follows the provider, which never fills in this
+                # field. Cf. `Settings.optional_fields_served`.
                 "product": (
-                    _ref(produit["id"], "/products") if settings.champs_facultatifs_servis else None
+                    _ref(product["id"], "/products") if settings.optional_fields_served else None
                 ),
-                "vat_rate": produit["vat_rate"],
-                "currency_amount_before_tax": _euros(ht),
-                "currency_tax": _euros(tva),
-                "tax": _euros(tva),
-                "raw_currency_unit_price": _euros(pu),
+                "vat_rate": product["vat_rate"],
+                "currency_amount_before_tax": _euros(before_tax),
+                "currency_tax": _euros(tax),
+                "tax": _euros(tax),
+                "raw_currency_unit_price": _euros(unit_price),
                 "discount": {"type": "relative", "value": "0"},
                 "section_rank": 1,
-                "imputation_dates": {"start_date": _d(jour), "end_date": _d(jour)},
-                "created_at": horodatage,
-                "updated_at": horodatage,
+                "imputation_dates": {"start_date": _d(day), "end_date": _d(day)},
+                "created_at": timestamp,
+                "updated_at": timestamp,
             }
         ]
-        _changement(donnees, "customer_invoices", facture, "insert", horodatage)
-        return f"customer_invoice:{ident} créée"
+        _change(data, "customer_invoices", invoice, "insert", timestamp)
+        return f"customer_invoice:{ident} created"
 
-    def _evt_maj_client(
-        self, donnees: dict[str, Any], rng: random.Random, horodatage: str, jour: date
+    def _evt_customer_update(
+        self, data: dict[str, Any], rng: random.Random, timestamp: str, day: date
     ) -> str:
-        del jour
-        client = donnees["customers"][rng.randrange(len(donnees["customers"]))]
-        client["phone"] = f"+331{rng.randint(10_000_000, 99_999_999)}"
-        client["updated_at"] = horodatage
-        _changement(donnees, "customers", client, "update", horodatage)
-        return f"customer:{client['id']}"
+        del day
+        customer = data["customers"][rng.randrange(len(data["customers"]))]
+        customer["phone"] = f"+331{rng.randint(10_000_000, 99_999_999)}"
+        customer["updated_at"] = timestamp
+        _change(data, "customers", customer, "update", timestamp)
+        return f"customer:{customer['id']}"
 
-    def _evt_facture_fournisseur(
-        self, donnees: dict[str, Any], rng: random.Random, horodatage: str, jour: date
+    def _evt_supplier_invoice(
+        self, data: dict[str, Any], rng: random.Random, timestamp: str, day: date
     ) -> str:
-        fournisseur = donnees["suppliers"][rng.randrange(len(donnees["suppliers"]))]
-        compte_charge = dict((nom, compte) for nom, _, _, _, compte, _ in _CHARGES_FOURNISSEUR)[
-            fournisseur["name"]
-        ]
-        ht = rng.randrange(20_000, 400_000, 1_000)
-        tva = ht * TVA // 100
-        ttc = ht + tva
-        ident = _prochain_id(donnees["supplier_invoices"])
-        numero = f"{fournisseur['name'][:3].upper()}-2026-EVO{ident:03d}"
+        supplier = data["suppliers"][rng.randrange(len(data["suppliers"]))]
+        expense_account = dict(
+            (name, account) for name, _, _, _, account, _ in _SUPPLIER_EXPENSE_ACCOUNTS
+        )[supplier["name"]]
+        before_tax = rng.randrange(20_000, 400_000, 1_000)
+        tax = before_tax * TVA // 100
+        total = before_tax + tax
+        ident = _next_id(data["supplier_invoices"])
+        number = f"{supplier['name'][:3].upper()}-2026-EVO{ident:03d}"
 
-        grand = _grand_courant(donnees)
-        repere = len(grand.lignes)
-        ecriture = grand.passer(
+        ledger = _current_ledger(data)
+        mark = len(ledger.lignes)
+        entry = ledger.passer(
             journal="AC",
-            jour=jour,
-            libelle=f"{fournisseur['name']} — facture {numero}",
-            numero_piece=numero,
-            numero_facture=numero,
-            echeance=jour + timedelta(days=30),
+            jour=day,
+            libelle=f"{supplier['name']} — facture {number}",
+            numero_piece=number,
+            numero_facture=number,
+            echeance=day + timedelta(days=30),
             statut="validation_needed",
             mouvements=[
-                (compte_charge, ht, "Achat"),
-                ("445660", tva, f"TVA déductible {TVA}%"),
-                (_aux("401", fournisseur["name"]), -ttc, f"{fournisseur['name']} — {numero}"),
+                (expense_account, before_tax, "Achat"),
+                ("445660", tax, f"TVA déductible {TVA}%"),
+                (_aux("401", supplier["name"]), -total, f"{supplier['name']} — {number}"),
             ],
-            maj=horodatage,
+            maj=timestamp,
         )
-        _absorber(donnees, grand, horodatage, repere)
+        _absorb(data, ledger, timestamp, mark)
 
-        modele = donnees["supplier_invoices"][0]
-        facture = {
-            **modele,
+        template = data["supplier_invoices"][0]
+        invoice = {
+            **template,
             "id": ident,
             "label": "Achat complémentaire",
-            "invoice_number": numero,
-            "amount": _euros(ttc),
-            "currency_amount": _euros(ttc),
-            "currency_amount_before_tax": _euros(ht),
-            "currency_tax": _euros(tva),
-            "tax": _euros(tva),
-            "date": _d(jour),
-            "deadline": _d(jour + timedelta(days=30)),
+            "invoice_number": number,
+            "amount": _euros(total),
+            "currency_amount": _euros(total),
+            "currency_amount_before_tax": _euros(before_tax),
+            "currency_tax": _euros(tax),
+            "tax": _euros(tax),
+            "date": _d(day),
+            "deadline": _d(day + timedelta(days=30)),
             "reconciled": False,
             "accounting_status": "validation_needed",
             "payment_status": "to_be_processed",
             "paid": False,
-            "remaining_amount_with_tax": _euros(ttc),
-            "remaining_amount_without_tax": _euros(ht),
-            "ledger_entry": {"id": ecriture["id"]},
-            "supplier": _ref(fournisseur["id"], "/suppliers"),
-            "filename": f"{numero}.pdf",
-            "public_file_url": f"https://files.example/{numero}.pdf",
+            "remaining_amount_with_tax": _euros(total),
+            "remaining_amount_without_tax": _euros(before_tax),
+            "ledger_entry": {"id": entry["id"]},
+            "supplier": _ref(supplier["id"], "/suppliers"),
+            "filename": f"{number}.pdf",
+            "public_file_url": f"https://files.example/{number}.pdf",
             "external_reference": f"evolution:purchase:{ident}",
             "invoice_lines": _lien(f"/supplier_invoices/{ident}/invoice_lines"),
             "categories": _lien(f"/supplier_invoices/{ident}/categories"),
             "payments": _lien(f"/supplier_invoices/{ident}/payments"),
             "matched_transactions": _lien(f"/supplier_invoices/{ident}/matched_transactions"),
-            "created_at": horodatage,
-            "updated_at": horodatage,
+            "created_at": timestamp,
+            "updated_at": timestamp,
         }
-        donnees["supplier_invoices"].append(facture)
-        donnees["supplier_invoice_lines"][ident] = [
+        data["supplier_invoices"].append(invoice)
+        data["supplier_invoice_lines"][ident] = [
             {
                 "id": ident * 100 + 1,
                 "label": "Achat complémentaire",
                 "quantity": "1",
                 "unit": "forfait",
-                "amount": _euros(ttc),
-                "currency_amount": _euros(ttc),
-                "currency_amount_before_tax": _euros(ht),
-                "currency_tax": _euros(tva),
-                "tax": _euros(tva),
+                "amount": _euros(total),
+                "currency_amount": _euros(total),
+                "currency_amount_before_tax": _euros(before_tax),
+                "currency_tax": _euros(tax),
                 "vat_rate": "FR_200",
-                "raw_currency_unit_price": _euros(ht),
+                "raw_currency_unit_price": _euros(before_tax),
                 "description": "Ligne unique.",
                 "ledger_account": (
-                    {"id": grand.compte(compte_charge)["id"]}
-                    if settings.champs_facultatifs_servis
+                    {"id": ledger.compte(expense_account)["id"]}
+                    if settings.optional_fields_served
                     else None
                 ),
-                "created_at": horodatage,
-                "updated_at": horodatage,
+                "created_at": timestamp,
+                "updated_at": timestamp,
             }
         ]
-        _changement(donnees, "supplier_invoices", facture, "insert", horodatage)
-        return f"supplier_invoice:{ident} créée"
+        _change(data, "supplier_invoices", invoice, "insert", timestamp)
+        return f"supplier_invoice:{ident} created"
 
-    def _evt_transaction_orpheline(
-        self, donnees: dict[str, Any], rng: random.Random, horodatage: str, jour: date
+    def _evt_orphan_transaction(
+        self, data: dict[str, Any], rng: random.Random, timestamp: str, day: date
     ) -> str:
-        """Un encaissement SANS facture — le travail réel d'un cabinet.
+        """A payment WITHOUT an invoice — the real-life work of a firm.
 
-        Il déséquilibrerait la comptabilité s'il n'était pas passé : la
-        contrepartie va donc en compte d'attente 471, ce que fait tout
-        comptable devant un mouvement non identifié.
+        It would unbalance the books if left unposted: the counterpart
+        therefore goes to suspense account 471, exactly what any accountant
+        does facing an unidentified movement.
         """
-        montant = rng.randrange(15_000, 90_000, 500)
-        grand = _grand_courant(donnees)
-        repere = len(grand.lignes)
-        grand.passer(
+        amount = rng.randrange(15_000, 90_000, 500)
+        ledger = _current_ledger(data)
+        mark = len(ledger.lignes)
+        ledger.passer(
             journal="BQ",
-            jour=jour,
+            jour=day,
             libelle="Encaissement non identifié",
-            numero_piece=f"BQ-ATT-{_prochain_id(donnees['transactions']):04d}",
+            numero_piece=f"BQ-ATT-{_next_id(data['transactions']):04d}",
             statut="waiting_details",
             mouvements=[
-                ("512000", montant, "Encaissement non identifié"),
-                ("471000", -montant, "Compte d'attente"),
+                ("512000", amount, "Encaissement non identifié"),
+                ("471000", -amount, "Compte d'attente"),
             ],
-            maj=horodatage,
+            maj=timestamp,
         )
-        _absorber(donnees, grand, horodatage, repere)
+        _absorb(data, ledger, timestamp, mark)
         transaction = _transaction(
-            _prochain_id(donnees["transactions"]),
-            jour=jour,
+            _next_id(data["transactions"]),
+            jour=day,
             libelle="VIR RECU TIERS NON IDENTIFIE",
-            montant=montant,
-            compte=donnees["bank_accounts"][0],
-            journal=next(j for j in donnees["journals"] if j["code"] == "BQ"),
+            montant=amount,
+            compte=data["bank_accounts"][0],
+            journal=next(j for j in data["journals"] if j["code"] == "BQ"),
             tiers_client=None,
             tiers_fournisseur=None,
-            reste=montant,
+            reste=amount,
             categories=[],
             rng=rng,
         )
-        transaction["created_at"] = transaction["updated_at"] = horodatage
-        donnees["transactions"].append(transaction)
-        _changement(donnees, "transactions", transaction, "insert", horodatage)
-        _recaler_solde(donnees)
-        return f"transaction:{transaction['id']} orpheline"
+        transaction["created_at"] = transaction["updated_at"] = timestamp
+        data["transactions"].append(transaction)
+        _change(data, "transactions", transaction, "insert", timestamp)
+        _rebalance_cash(data)
+        return f"transaction:{transaction['id']} orphaned"
 
 
-# ── Utilitaires partagés par les événements ──────────────────────────────────
+# ── Utilities shared by the events ────────────────────────────────────────────
 
-#: Le compte de charge de chaque fournisseur — recopié du catalogue du dataset
-#: pour éviter un import circulaire au chargement du module.
-_CHARGES_FOURNISSEUR: tuple[tuple[str, str, str, str, str, str], ...] = (
+#: Each supplier's expense account — copied from the dataset's catalog to
+#: avoid a circular import at module load time.
+_SUPPLIER_EXPENSE_ACCOUNTS: tuple[tuple[str, str, str, str, str, str], ...] = (
     ("Fivetech Partners", "", "", "", "604000", ""),
     ("Softalliance", "", "", "", "651600", ""),
     ("Foncière Beaumont", "", "", "", "613200", ""),
@@ -460,69 +458,69 @@ _CHARGES_FOURNISSEUR: tuple[tuple[str, str, str, str, str, str], ...] = (
 )
 
 
-def _prochain_id(elements: list[dict[str, Any]]) -> int:
+def _next_id(elements: list[dict[str, Any]]) -> int:
     return max((e["id"] for e in elements), default=0) + 1
 
 
-def ecriture_suivante(donnees: dict[str, Any]) -> int:
-    return _prochain_id(donnees["ledger_entries"])
+def next_ledger_entry(data: dict[str, Any]) -> int:
+    return _next_id(data["ledger_entries"])
 
 
-def _compte_client(client: dict[str, Any]) -> str:
-    if client["customer_type"] == "company":
-        return _aux("411", client["name"])
-    return _aux("411", f"{client['last_name']}{client['first_name']}")
+def _customer_account(customer: dict[str, Any]) -> str:
+    if customer["customer_type"] == "company":
+        return _aux("411", customer["name"])
+    return _aux("411", f"{customer['last_name']}{customer['first_name']}")
 
 
-def _grand_courant(donnees: dict[str, Any]) -> Grand:
-    """Un accumulateur repositionné sur l'état courant du grand livre.
+def _current_ledger(data: dict[str, Any]) -> Grand:
+    """An accumulator repositioned onto the ledger's current state.
 
-    Il porte les MÊMES listes que le dataset (pas des copies) : ce qu'il passe
-    atterrit directement dans `ledger_entries` / `ledger_entry_lines`, et il
-    n'y a donc aucune fenêtre où les deux divergeraient.
+    It carries the SAME lists as the dataset (not copies): what it posts
+    lands directly in `ledger_entries` / `ledger_entry_lines`, so there's no
+    window where the two would diverge.
     """
-    grand = Grand(donnees["journals"], donnees["ledger_accounts"])
-    grand.ecritures = donnees["ledger_entries"]
-    grand.lignes = donnees["ledger_entry_lines"]
-    grand._id_ecriture = _prochain_id(donnees["ledger_entries"])
-    grand._id_ligne = _prochain_id(donnees["ledger_entry_lines"])
-    return grand
+    ledger = Grand(data["journals"], data["ledger_accounts"])
+    ledger.ecritures = data["ledger_entries"]
+    ledger.lignes = data["ledger_entry_lines"]
+    ledger._id_ecriture = _next_id(data["ledger_entries"])
+    ledger._id_ligne = _next_id(data["ledger_entry_lines"])
+    return ledger
 
 
-def _absorber(donnees: dict[str, Any], grand: Grand, horodatage: str, repere: int) -> None:
-    """Inscrit au changelog les lignes d'écriture créées depuis `repere`.
+def _absorb(data: dict[str, Any], ledger: Grand, timestamp: str, mark: int) -> None:
+    """Logs to the changelog the entry lines created since `mark`.
 
-    Le repère est une POSITION dans la liste, relevée avant l'appel à
-    `passer()`. C'est la seule façon fiable de désigner « ce qui vient d'être
-    ajouté » : filtrer sur l'horodatage raterait deux écritures passées dans
-    la même seconde, ce qui arrive dès qu'un test force plusieurs pas d'un coup.
+    The mark is a POSITION in the list, recorded before calling `passer()`.
+    It's the only reliable way to designate "what was just added": filtering
+    on the timestamp would miss two entries posted within the same second,
+    which happens as soon as a test forces several steps at once.
     """
-    for ligne in grand.lignes[repere:]:
-        ligne["created_at"] = ligne["updated_at"] = horodatage
-        _changement(donnees, "ledger_entry_lines", ligne, "insert", horodatage)
+    for line in ledger.lignes[mark:]:
+        line["created_at"] = line["updated_at"] = timestamp
+        _change(data, "ledger_entry_lines", line, "insert", timestamp)
 
 
-def _changement(
-    donnees: dict[str, Any],
-    famille: str,
+def _change(
+    data: dict[str, Any],
+    family: str,
     element: dict[str, Any],
     operation: str,
-    horodatage: str,
+    timestamp: str,
 ) -> None:
-    donnees["changelogs"].setdefault(famille, []).append(
+    data["changelogs"].setdefault(family, []).append(
         {
             "id": element["id"],
             "operation": operation,
-            "processed_at": horodatage,
+            "processed_at": timestamp,
             "created_at": element["created_at"],
             "updated_at": element["updated_at"],
         }
     )
 
 
-def _recaler_solde(donnees: dict[str, Any]) -> None:
+def _rebalance_cash(data: dict[str, Any]) -> None:
     from .dataset.realiste import _recaler_soldes_bancaires
 
     _recaler_soldes_bancaires(
-        donnees["bank_accounts"], donnees["ledger_entry_lines"], donnees["ledger_accounts"]
+        data["bank_accounts"], data["ledger_entry_lines"], data["ledger_accounts"]
     )

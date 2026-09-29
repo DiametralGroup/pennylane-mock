@@ -1,33 +1,33 @@
-"""Les endpoints `/changelogs/*` — l'extraction incrémentale native.
+"""The `/changelogs/*` endpoints — native incremental extraction.
 
-C'est LE mécanisme que le fournisseur recommande pour se synchroniser : on
-poll un journal d'événements plutôt que de relister l'univers. Le dialecte a
-quatre règles, toutes reproduites ici parce que chacune peut casser un
-connecteur en production sans se voir en test :
+This is THE mechanism the provider recommends for syncing: polling an event
+log rather than relisting the whole universe. The dialect has four rules,
+all reproduced here because each one can break a connector in production
+without ever showing up in a test:
 
-  1. **Ordre chronologique croissant** — le plus ancien d'abord. Un
-     consommateur qui suppose l'inverse pose son point de reprise sur le
-     PREMIER événement de la page et reperd tout à chaque passage.
+  1. **Ascending chronological order** — oldest first. A consumer that
+     assumes the opposite sets its resume point on the FIRST event of the
+     page and loses everything again on every pass.
 
-  2. **Rétention de quatre semaines.** Une `start_date` plus ancienne rend
-     **422**, pas une liste tronquée. C'est la différence entre « je n'ai rien
-     reçu, donc rien n'a bougé » et « ma fenêtre est trop large » : sans le
-     422, un pipeline arrêté cinq semaines croirait avoir rattrapé son retard.
+  2. **Four-week retention.** An older `start_date` renders **422**, not a
+     truncated list. That's the difference between "I received nothing, so
+     nothing changed" and "my window is too wide": without the 422, a
+     pipeline stopped for five weeks would believe it had caught up.
 
-  3. **`start_date` et `cursor` sont EXCLUSIFS** — les deux ensemble rendent
-     **400**. La pagination continue une fenêtre ; elle n'en ouvre pas une
-     nouvelle. C'est ce qui interdit le bug classique « je renvoie ma
-     start_date à chaque page » et rejoue la même première page en boucle.
+  3. **`start_date` and `cursor` are MUTUALLY EXCLUSIVE** — both together
+     render **400**. Pagination continues a window; it doesn't open a new
+     one. This is what rules out the classic "I resend my start_date on
+     every page" bug, which replays the same first page forever.
 
-  4. **Le point de reprise ne s'avance qu'une fois `has_more` faux.** Le mock
-     ne peut pas l'imposer, mais il peut le rendre observable : le plan de
-     contrôle `/__admin/state` expose les derniers paramètres reçus par
-     chemin, ce qui permet à un test aval de PROUVER que le consommateur a
-     paginé jusqu'au bout avant de bouger sa borne.
+  4. **The resume point only advances once `has_more` is false.** The mock
+     can't enforce this, but it can make it observable: the `/__admin/state`
+     control plane exposes the last parameters received per path, letting a
+     downstream test PROVE that the consumer paginated all the way through
+     before moving its bound.
 
-Un événement porte l'ID, l'opération et trois horodatages — **jamais** l'état
-de la ressource. Il faut un second appel pour l'obtenir, et le fournisseur
-recommande de le faire par lots :
+An event carries the ID, the operation and three timestamps — **never** the
+resource's state. A second call is required to get it, and the provider
+recommends doing so in batches:
 `filter=[{"field":"id","operator":"in","value":[…]}]`.
 """
 
@@ -39,74 +39,74 @@ from typing import Any
 from .settings import settings
 
 
-class FenetreTropAncienne(ValueError):
-    """`start_date` au-delà de la rétention → 422."""
+class WindowTooOld(ValueError):
+    """`start_date` beyond retention → 422."""
 
 
-class ParametresExclusifs(ValueError):
-    """`start_date` ET `cursor` dans la même requête → 400."""
+class ExclusiveParameters(ValueError):
+    """`start_date` AND `cursor` in the same request → 400."""
 
 
-class DateInvalide(ValueError):
-    """`start_date` qui n'est pas du RFC 3339 → 400."""
+class InvalidDate(ValueError):
+    """`start_date` that isn't RFC 3339 → 400."""
 
 
-def analyser_start_date(brut: str | None) -> datetime | None:
-    """RFC 3339, `Z` accepté — c'est la forme que le fournisseur émet."""
-    if not brut:
+def parse_start_date(raw: str | None) -> datetime | None:
+    """RFC 3339, `Z` accepted — the form the provider emits."""
+    if not raw:
         return None
-    texte = brut.strip()
-    if texte.endswith("Z"):
-        texte = texte[:-1] + "+00:00"
+    text = raw.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
     try:
-        quand = datetime.fromisoformat(texte)
+        when = datetime.fromisoformat(text)
     except ValueError as exc:
-        raise DateInvalide("start_date must follow RFC3339 (e.g. 2026-07-15T09:00:00Z)") from exc
-    return quand if quand.tzinfo else quand.replace(tzinfo=UTC)
+        raise InvalidDate("start_date must follow RFC3339 (e.g. 2026-07-15T09:00:00Z)") from exc
+    return when if when.tzinfo else when.replace(tzinfo=UTC)
 
 
-def verifier_fenetre(depuis: datetime | None, maintenant: datetime) -> None:
-    """La rétention de quatre semaines. Au-delà : 422, pas une liste tronquée."""
-    if depuis is None:
+def check_window(since: datetime | None, now: datetime) -> None:
+    """The four-week retention. Beyond it: 422, not a truncated list."""
+    if since is None:
         return
-    limite = maintenant - timedelta(days=settings.changelog_retention_days)
-    if depuis < limite:
-        raise FenetreTropAncienne(
+    limit = now - timedelta(days=settings.changelog_retention_days)
+    if since < limit:
+        raise WindowTooOld(
             f"start_date is older than the {settings.changelog_retention_days}-day retention window"
         )
 
 
-def selectionner(
-    evenements: list[dict[str, Any]],
-    depuis: datetime | None,
-    maintenant: datetime,
+def select(
+    events: list[dict[str, Any]],
+    since: datetime | None,
+    now: datetime,
 ) -> list[dict[str, Any]]:
-    """Les événements retenus, postérieurs à la borne, en ordre chronologique.
+    """The events retained, later than the bound, in chronological order.
 
-    ┌─ LA RÉTENTION PURGE, ELLE NE SE CONTENTE PAS DE REFUSER ────────────────┐
-    │ « Changes are retained for 4 weeks. » Un événement plus ancien n'existe  │
-    │ PLUS : il n'est pas seulement inaccessible par `start_date`, il ne       │
-    │ figure pas non plus dans la réponse sans borne. Un mock qui servirait    │
-    │ tout l'historique apprendrait au consommateur qu'une resynchronisation   │
-    │ complète est possible par le changelog — elle ne l'est pas, et c'est     │
-    │ exactement ce qui casse un pipeline arrêté cinq semaines.                │
+    ┌─ RETENTION PURGES, IT DOESN'T JUST REFUSE ──────────────────────────────┐
+    │ "Changes are retained for 4 weeks." An older event no longer EXISTS: it  │
+    │ isn't just unreachable via `start_date`, it also doesn't appear in the   │
+    │ response without a bound. A mock that served the full history would      │
+    │ teach the consumer that a full resync is possible through the           │
+    │ changelog — it isn't, and that's exactly what breaks a pipeline stopped  │
+    │ for five weeks.                                                          │
     └─────────────────────────────────────────────────────────────────────────┘
 
-    Le tri est refait ici plutôt que supposé : les événements d'évolution sont
-    APPENDUS au journal du jeu de base, donc la liste brute n'est pas triée dès
-    que le monde a bougé. Un consommateur qui reçoit des événements dans le
-    désordre pose un point de reprise faux, et le fait silencieusement.
+    The sort is redone here rather than assumed: evolution events are
+    APPENDED to the base dataset's log, so the raw list isn't sorted once the
+    world has moved. A consumer that receives events out of order sets a
+    false resume point, and does so silently.
     """
-    limite = maintenant - timedelta(days=settings.changelog_retention_days)
-    retenus = [e for e in evenements if _instant(e["processed_at"]) >= limite]
-    ordonnes = sorted(retenus, key=lambda e: (e["processed_at"], e["id"]))
-    if depuis is None:
-        return ordonnes
-    borne = depuis.astimezone(UTC)
-    return [e for e in ordonnes if _instant(e["processed_at"]) >= borne]
+    limit = now - timedelta(days=settings.changelog_retention_days)
+    retained = [e for e in events if _instant(e["processed_at"]) >= limit]
+    ordered = sorted(retained, key=lambda e: (e["processed_at"], e["id"]))
+    if since is None:
+        return ordered
+    bound = since.astimezone(UTC)
+    return [e for e in ordered if _instant(e["processed_at"]) >= bound]
 
 
-def _instant(horodatage: str) -> datetime:
-    texte = horodatage[:-1] + "+00:00" if horodatage.endswith("Z") else horodatage
-    quand = datetime.fromisoformat(texte)
-    return quand if quand.tzinfo else quand.replace(tzinfo=UTC)
+def _instant(timestamp: str) -> datetime:
+    text = timestamp[:-1] + "+00:00" if timestamp.endswith("Z") else timestamp
+    when = datetime.fromisoformat(text)
+    return when if when.tzinfo else when.replace(tzinfo=UTC)

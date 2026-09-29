@@ -5,10 +5,10 @@ description = "Pennylane Company API v2 mock — the accounting view of the Bor�
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
-# Le périmètre des dépendances est une décision, pas un accident : FastAPI et
-# uvicorn, rien d'autre. Le curseur de pagination est du base64 de JSON — de la
-# stdlib — et l'authentification est un Bearer statique : aucune crypto tierce
-# n'est nécessaire.
+# The dependency footprint is a decision, not an accident: FastAPI and
+# uvicorn, nothing else. The pagination cursor is base64 of JSON — from the
+# stdlib — and authentication is a static Bearer: no third-party crypto
+# is needed.
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
@@ -42,9 +42,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL", "ARG"]
-# PLR0913/PLR2004 : un mock manipule des seuils et des formes verbeuses par
-# nature ; PLC0415 : les imports différés sont délibérés (montage conditionnel
-# de /__admin, cycle state ↔ dataset ↔ settings).
+# PLR0913/PLR2004: a mock deals with thresholds and verbose shapes by
+# nature; PLC0415: deferred imports are deliberate (conditional mounting
+# of /__admin, state <-> dataset <-> settings cycle).
 ignore = ["PLR0913", "PLR2004", "PLC0415"]
 
 [tool.ruff.format]

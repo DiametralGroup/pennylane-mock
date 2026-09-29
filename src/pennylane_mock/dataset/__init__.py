@@ -1,4 +1,4 @@
-"""Construction du jeu de données. Un seul monde, une seule voie d'entrée."""
+"""Dataset construction. One single world, one single entry point."""
 
 from __future__ import annotations
 
